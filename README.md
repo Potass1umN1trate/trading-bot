@@ -1,23 +1,8 @@
-
 # Trading Bot
 
-This project is an AI-powered trading bot that uses machine learning to predict market trends and execute trades on the Bybit exchange.
+This is a trading bot that uses AI to predict price movements and execute trades on Bybit.
 
-## Features
-
-- Fetches historical market data from Bybit
-- Calculates technical indicators (RSI, MACD, Bollinger Bands, etc.)
-- Trains a RandomForestClassifier model to predict price direction
-- Executes trades based on AI predictions and predefined thresholds
-- Logs trading activities and errors
-
-## Requirements
-
-- Python 3.7+
-- Bybit API credentials
-- Required Python packages (listed in `requirements.txt`)
-
-## Installation
+## Setup
 
 1. Clone the repository:
     ```sh
@@ -25,42 +10,68 @@ This project is an AI-powered trading bot that uses machine learning to predict 
     cd trading-bot
     ```
 
-2. Install the required packages:
+2. Create a virtual environment and activate it:
+    ```sh
+    python3 -m venv .venv
+    source .venv/bin/activate
+    ```
+
+3. Install the required packages:
     ```sh
     pip install -r requirements.txt
     ```
 
-3. Create a `config.ini` file with your Bybit API credentials and trading parameters:
-    ```ini
-    [bybit]
-    api_key = your_api_key
-    api_secret = your_api_secret
-    url = https://api.bybit.com
+4. Configure your API keys and trading parameters:
+    - Copy `config.yaml.example` to `config.yaml` and update the values:
+        ```sh
+        cp config.yaml.example config.yaml
+        ```
 
-    [trading]
-    upward_trend_threshold = 1.0
-    dip_threshold = -1.0
-    profit_threshold = 2.0
-    stop_loss_threshold = -1.0
-    initial_price = 50000.0
-    ```
+## Running the Bot
 
-## Usage
+To start the trading bot, run:
+```sh
+python main.py
+```
 
-1. Run the trading bot:
-    ```sh
-    python main.py
-    ```
+## Configuration
 
-2. The bot will start fetching market data, making predictions, and executing trades based on the AI model and predefined thresholds.
+The bot uses a `config.yaml` file for configuration. Here is an example:
 
-## Logging
+```yaml
+bybit:
+  url: "https://api-demo.bybit.com"
+  api_key: your_api_key
+  api_secret: your_api_secret
 
-The bot logs its activities to `trading_bot.log`. You can monitor this file to see the bot's actions and any errors that occur.
+trading:
+  symbol: "BTCUSDT"
+  category: "linear"
+  order_value: 100.00
+  upward_trend_threshold: 1.50
+  dip_threshold: -2.25
+  profit_threshold: 1.25
+  stop_loss_threshold: -2.00
+  initial_price: 100.00
+  trading_interval: "60"
 
-## Disclaimer
+ai_model:
+  lookback_period: 24
+  prediction_horizon: 1
+  features: ['close', 'volume', 'rsi', 'macd', 'bollinger_upper', 'bollinger_lower']
+  training_data_limit: 2000
+```
 
-This trading bot is for educational purposes only. Trading cryptocurrencies involves significant risk, and you should only trade with money you can afford to lose. The authors are not responsible for any financial losses incurred while using this bot.
+## .gitignore
+
+The `.gitignore` file includes the following entries to avoid committing sensitive information and unnecessary files:
+
+```ignore
+.gitignore
+config.yaml
+.venv
+*.log
+```
 
 ## License
 
