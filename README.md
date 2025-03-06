@@ -34,6 +34,20 @@ To start the trading bot, run:
 python main.py
 ```
 
+## Docker
+
+To build and run the trading bot using Docker:
+
+1. Build the Docker image:
+    ```sh
+    sudo docker build -t trading-bot .
+    ```
+
+2. Run the Docker container:
+    ```sh
+    sudo docker run -d --name trading-bot-container trading-bot
+    ```
+
 ## Configuration
 
 The bot uses a `config.yaml` file for configuration. Here is an example:
@@ -54,6 +68,7 @@ trading:
   stop_loss_threshold: -2.00
   initial_price: 100.00
   trading_interval: "60"
+  quantity_step: 0.001  # Add quantity_step parameter
 
 ai_model:
   lookback_period: 24

@@ -28,7 +28,8 @@ class TradingBot:
         features,
         interval_seconds,
         training_data_limit,
-        trading_interval
+        trading_interval,
+        quantity_step  # Add quantity_step parameter
     ):
         # Initialize logger
         self.setup_logger()
@@ -66,6 +67,7 @@ class TradingBot:
         self.interval_seconds = interval_seconds
         self.training_data_limit = training_data_limit
         self.trading_interval = trading_interval
+        self.quantity_step = quantity_step  # Initialize quantity_step
         
         # Initialize or load AI model
         self.initialize_model()
@@ -81,7 +83,7 @@ class TradingBot:
         
         # Create console handler with a higher log level
         console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.INFO)
+        console_handler.setLevel(logging.DEBUG)
         
         # Create formatter and add it to the handlers
         formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -387,8 +389,8 @@ class TradingBot:
         if not price:
             return None
         
-        # For Bitcoin, round to 5 decimal places
-        quantity = round(usd_amount / price, 5)
+        # Calculate quantity and round to the nearest quantity step
+        quantity = round(usd_amount / price / self.quantity_step) * self.quantity_step
         return quantity
 
     def execute_trade_strategy(self):
@@ -417,7 +419,7 @@ class TradingBot:
                 # Take profit or stop loss
                 if (price_change_pct >= self.profit_threshold or 
                     price_change_pct <= self.stop_loss_threshold or
-                    prediction['direction'] == 'down' and prediction['confidence'] > 0.75):
+                    prediction['direction'] == 'down' and prediction['confidence'] > 0.75 ):
                     
                     self.logger.info(f"Closing LONG position. Price change: {price_change_pct:.2f}%, " +
                                    f"AI prediction: {prediction['direction']} ({prediction['confidence']:.2f})")
@@ -440,7 +442,7 @@ class TradingBot:
         
         else:
             # No open positions, check if we should open one
-            if prediction['confidence'] > 0.65:  # Only trade when confidence is high
+            if prediction['confidence'] > 65: # Only trade when confidence is high
                 # Calculate quantity based on order value
                 quantity = self.calculate_trade_quantity(current_price, self.order_value)
                 
@@ -493,6 +495,7 @@ if __name__ == "__main__":
         features=['rsi', 'macd', 'macd_signal', 'bollinger_upper', 'bollinger_lower', 'price_change_1h', 'price_change_4h', 'price_change_24h', 'volume_change'],
         interval_seconds=300,
         training_data_limit=2000,
-        trading_interval='60'
+        trading_interval='60',
+        quantity_step=0.001  # Add quantity_step parameter
     )
     bot.run()
