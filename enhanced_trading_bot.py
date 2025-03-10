@@ -144,48 +144,67 @@ class TradingBot:
             self.logger.error(f"Error fetching market data: {str(e)}")
             return None
 
+    def get_indicator_settings(self):
+        """
+        Dynamically adjusts indicator parameters based on the selected trading interval.
+        """
+        interval = int(self.trading_interval)  # Convert to integer
+        if interval == 1:
+            return {"rsi_period": 7, "macd_short": 6, "macd_long": 13, "macd_signal": 5, "bollinger_window": 10}
+        elif interval <= 15:
+            return {"rsi_period": 14, "macd_short": 12, "macd_long": 26, "macd_signal": 9, "bollinger_window": 20}
+        elif interval <= 60:
+            return {"rsi_period": 21, "macd_short": 26, "macd_long": 50, "macd_signal": 9, "bollinger_window": 30}
+        else:
+            return {"rsi_period": 21, "macd_short": 50, "macd_long": 100, "macd_signal": 9, "bollinger_window": 50}
+
     def calculate_indicators(self, df):
-        """Calculate technical indicators for the dataset"""
+        """
+        Calculate technical indicators using adaptive settings based on trading interval.
+        """
         if df is None or len(df) == 0:
             return None
         
-        # Make a copy to avoid SettingWithCopyWarning
         df = df.copy()
-        
-        # RSI (Relative Strength Index)
+        settings = self.get_indicator_settings()
+
+        # RSI Calculation
         delta = df['close'].diff()
-        gain = delta.where(delta > 0, 0)
-        loss = -delta.where(delta < 0, 0)
-        
-        avg_gain = gain.rolling(window=14).mean()
-        avg_loss = loss.rolling(window=14).mean()
-        
-        rs = avg_gain / avg_loss
+        gain = np.where(delta > 0, delta, 0)
+        loss = np.where(delta < 0, -delta, 0)
+        avg_gain = pd.Series(gain).rolling(window=settings["rsi_period"], min_periods=1).mean()
+        avg_loss = pd.Series(loss).rolling(window=settings["rsi_period"], min_periods=1).mean()
+        rs = avg_gain / (avg_loss + 1e-10)  # Avoid division by zero
         df['rsi'] = 100 - (100 / (1 + rs))
-        
-        # MACD (Moving Average Convergence Divergence)
-        exp1 = df['close'].ewm(span=12, adjust=False).mean()
-        exp2 = df['close'].ewm(span=26, adjust=False).mean()
-        df['macd'] = exp1 - exp2
-        df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
-        
+
+        # MACD Calculation
+        df['macd'] = df['close'].ewm(span=settings["macd_short"], adjust=False).mean() - df['close'].ewm(span=settings["macd_long"], adjust=False).mean()
+        df['macd_signal'] = df['macd'].ewm(span=settings["macd_signal"], adjust=False).mean()
+
         # Bollinger Bands
-        df['sma'] = df['close'].rolling(window=20).mean()
-        df['std'] = df['close'].rolling(window=20).std()
+        df['sma'] = df['close'].rolling(window=settings["bollinger_window"]).mean()
+        df['std'] = df['close'].rolling(window=settings["bollinger_window"]).std()
         df['bollinger_upper'] = df['sma'] + (df['std'] * 2)
         df['bollinger_lower'] = df['sma'] - (df['std'] * 2)
-        
-        # Percentage change features
-        df['price_change_1h'] = df['close'].pct_change(1) * 100
-        df['price_change_4h'] = df['close'].pct_change(4) * 100
-        df['price_change_24h'] = df['close'].pct_change(24) * 100
-        
-        # Volume change
+
+        # VWAP
+        df['vwap'] = (df['volume'] * df['close']).cumsum() / df['volume'].cumsum()
+
+        # ATR (Average True Range for volatility)
+        df['high_low'] = df['high'] - df['low']
+        df['high_close'] = np.abs(df['high'] - df['close'].shift())
+        df['low_close'] = np.abs(df['low'] - df['close'].shift())
+        df['true_range'] = df[['high_low', 'high_close', 'low_close']].max(axis=1)
+        df['atr'] = df['true_range'].rolling(window=14).mean()
+
+        # Momentum & Price Change
+        df['momentum'] = df['close'].diff(4)
+        df['price_change_1m'] = df['close'].pct_change(1) * 100
+        df['price_change_5m'] = df['close'].pct_change(5) * 100
+        df['price_change_15m'] = df['close'].pct_change(15) * 100
         df['volume_change'] = df['volume'].pct_change() * 100
-        
-        # Drop NaN values resulting from calculations
+
         df.dropna(inplace=True)
-        
         return df
 
     def create_labels(self, df):
