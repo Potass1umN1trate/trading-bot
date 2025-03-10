@@ -1,0 +1,22 @@
+bybit:
+  url: "https://api-demo.bybit.com"
+  api_key: your_api_key
+  api_secret: your_api_secret
+
+trading:
+  symbol: "BTCUSDT"
+  category: "linear"
+  order_value: 100.00
+  upward_trend_threshold: 1.50
+  dip_threshold: -2.25
+  profit_threshold: 1.25
+  stop_loss_threshold: -2.00
+  initial_price: 100.00
+  trading_interval: "60"
+  quantity_step: 0.001  # Add quantity_step parameter
+
+ai_model:
+  lookback_period: 24
+  prediction_horizon: 1
+  features: ['close', 'volume', 'rsi', 'macd', 'bollinger_upper', 'bollinger_lower']
+  training_data_limit: 2000
