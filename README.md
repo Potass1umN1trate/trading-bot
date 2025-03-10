@@ -94,9 +94,12 @@ The `.gitignore` file includes the following entries to avoid committing sensiti
 
 ```ignore
 .gitignore
+__pycache__
 config.yaml
 .venv
 *.log
+TODO.txt
+*.joblib
 ```
 
 ## License
