@@ -80,6 +80,7 @@ trading:
   initial_price: 100.00
   trading_interval: "60"
   quantity_step: 0.001  # Add quantity_step parameter
+  risk_per_trade: 0.01  # Add risk_per_trade parameter
 
 ai_model:
   lookback_period: 24

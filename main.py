@@ -44,6 +44,7 @@ if __name__ == "__main__":
         interval_seconds=config['trading']['interval_seconds'],
         trading_interval=config['trading']['trading_interval'],
         training_data_limit=int(config['ai_model']['training_data_limit']),
-        quantity_step=float(config['trading']['quantity_step'])  # Add quantity_step parameter
+        quantity_step=float(config['trading']['quantity_step']),  # Add quantity_step parameter
+        risk_per_trade=float(config['trading']['risk_per_trade'])  # Add risk_per_trade parameter
     )
     trading_bot.run()

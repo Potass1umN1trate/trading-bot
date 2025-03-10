@@ -29,7 +29,8 @@ class TradingBot:
         interval_seconds,
         training_data_limit,
         trading_interval,
-        quantity_step  # Add quantity_step parameter
+        quantity_step,  # Add quantity_step parameter
+        risk_per_trade=0.01  # Add risk_per_trade parameter
     ):
         # Initialize logger
         self.setup_logger()
@@ -68,6 +69,7 @@ class TradingBot:
         self.training_data_limit = training_data_limit
         self.trading_interval = trading_interval
         self.quantity_step = quantity_step  # Initialize quantity_step
+        self.risk_per_trade = risk_per_trade  # Initialize risk_per_trade
         
         # Initialize or load AI model
         self.initialize_model()
@@ -412,68 +414,167 @@ class TradingBot:
         quantity = round(usd_amount / price / self.quantity_step) * self.quantity_step
         return quantity
 
+    def calculate_risk_based_quantity(self, current_price):
+        # 1) Get wallet balance
+        balance = self.get_wallet_balance()
+        if balance is None:
+            return None
+        
+        # 2) Risk capital = balance * self.risk_per_trade
+        risk_capital = balance * self.risk_per_trade
+        
+        # 3) Decide a stop-loss distance, e.g. use ATR or a fixed fraction:
+        df = self.fetch_market_data(interval=self.trading_interval, limit=30)
+        df = self.calculate_indicators(df)
+        if df is None or 'atr' not in df.columns:
+            self.logger.warning('No ATR available, fallback to fixed stop distance.')
+            stop_distance = current_price * 0.01  # e.g. 1% of price
+        else:
+            # Use last ATR value
+            stop_distance = df.iloc[-1]['atr']
+        
+        # 4) Position size = risk_capital / (stop_distance)
+        quantity = risk_capital / stop_distance
+
+        # Round to nearest quantity step
+        quantity = round(quantity / self.quantity_step) * self.quantity_step
+        return quantity
+
+    def should_open_long(self, df, prediction_confidence):
+        """
+        Decide if we should open a LONG position based on:
+        - AI confidence
+        - MACD > MACD signal
+        - RSI above 50
+        """
+        # Basic checks
+        if prediction_confidence < 0.70:
+            return False  # not confident enough
+        
+        # Confluence checks
+        latest_row = df.iloc[-1]
+        if latest_row['macd'] <= latest_row['macd_signal']:
+            return False
+        if latest_row['rsi'] <= 50:
+            return False
+        
+        return True
+
+    def should_open_short(self, df, prediction_confidence):
+        """
+        Decide if we should open a SHORT position based on:
+        - AI confidence
+        - MACD < MACD signal
+        - RSI below 50
+        """
+        if prediction_confidence < 0.70:
+            return False
+        
+        latest_row = df.iloc[-1]
+        if latest_row['macd'] >= latest_row['macd_signal']:
+            return False
+        if latest_row['rsi'] >= 50:
+            return False
+        
+        return True
+
+    def place_atr_based_stop(self, side, entry_price, df):
+        if df is None or 'atr' not in df.columns:
+            return None, None
+        
+        last_atr = df.iloc[-1]['atr']
+        if side == 'Buy':
+            stop_loss = entry_price - 1.5 * last_atr
+            take_profit = entry_price + 2.0 * last_atr
+        else:  # side == 'Sell'
+            stop_loss = entry_price + 1.5 * last_atr
+            take_profit = entry_price - 2.0 * last_atr
+        
+        return stop_loss, take_profit
+
+    def update_trailing_stop(self, side, entry_price, current_price, trailing_stop_price, trail_gap):
+        """
+        Move trailing stop up if current_price - trailing_stop_price > trail_gap for a long.
+        """
+        if side == 'Buy':
+            if (current_price - trailing_stop_price) >= trail_gap:
+                new_stop = current_price - trail_gap
+                return max(new_stop, entry_price)  # ensure not below entry
+        else:
+            # Opposite for short
+            if (trailing_stop_price - current_price) >= trail_gap:
+                new_stop = current_price + trail_gap
+                return min(new_stop, entry_price)
+        
+        return trailing_stop_price
+
     def execute_trade_strategy(self):
-        """Execute the AI-powered trading strategy"""
-        # Get current market state
         current_price = self.get_current_price()
         if not current_price:
             return False
         
-        # Check current positions
         position = self.check_open_positions()
         
-        # Get AI prediction
+        # [IMPROVEMENT] Fetch fresh data for confluence
+        df = self.fetch_market_data(interval=self.trading_interval, limit=50)
+        df = self.calculate_indicators(df)
+        if df is None or len(df) < 5:
+            self.logger.info("Not enough data to make a confluence-based decision.")
+            return False
+        
+        # [IMPROVEMENT] AI Prediction
         prediction = self.predict_price_direction()
         if not prediction:
             return False
         
-        # Trading logic based on AI prediction and existing positions
+        direction = prediction['direction']  # 'up' or 'down'
+        confidence = prediction['confidence']
+        
         if position:
-            # We have an open position, check if we should close it
+            # We already have a position open
             entry_price = position['entry_price']
+            side = position['side']  # 'Buy' or 'Sell'
             price_change_pct = ((current_price - entry_price) / entry_price) * 100
             
-            # For long positions
-            if position['side'] == 'Buy':
-                # Take profit or stop loss
-                if (price_change_pct >= self.profit_threshold or 
-                    price_change_pct <= self.stop_loss_threshold or
-                    prediction['direction'] == 'down' and prediction['confidence'] > 0.75 ):
-                    
-                    self.logger.info(f"Closing LONG position. Price change: {price_change_pct:.2f}%, " +
-                                   f"AI prediction: {prediction['direction']} ({prediction['confidence']:.2f})")
-                    
-                    # Place sell order to close the position
-                    return self.place_order("Sell", position['size'])
+            # [IMPROVEMENT] Check if trailing stop or partial close is triggered
+            # For demonstration, keep it simple:
             
-            # For short positions
-            elif position['side'] == 'Sell':
-                # Take profit or stop loss (for shorts, profit when price goes down)
-                if (price_change_pct <= -self.profit_threshold or 
-                    price_change_pct >= self.stop_loss_threshold or
-                    prediction['direction'] == 'up' and prediction['confidence'] > 0.75):
-                    
-                    self.logger.info(f"Closing SHORT position. Price change: {price_change_pct:.2f}%, " +
-                                   f"AI prediction: {prediction['direction']} ({prediction['confidence']:.2f})")
-                    
-                    # Place buy order to close the position
+            if side == 'Buy':
+                # If price went up enough, or new signal is strongly down, close
+                if price_change_pct >= self.profit_threshold or (direction == 'down' and confidence > 0.75):
+                    self.logger.info(f"Closing LONG position. Price change: {price_change_pct:.2f}%, AI: {direction} ({confidence:.2f})")
+                    return self.place_order("Sell", position['size'])
+                # If price dips below stop_loss_threshold, close
+                if price_change_pct <= self.stop_loss_threshold:
+                    self.logger.info(f"Stop-loss triggered for LONG. Price change: {price_change_pct:.2f}%.")
+                    return self.place_order("Sell", position['size'])
+            else:
+                # side == 'Sell'
+                if price_change_pct <= -self.profit_threshold or (direction == 'up' and confidence > 0.75):
+                    self.logger.info(f"Closing SHORT position. Price change: {price_change_pct:.2f}%, AI: {direction} ({confidence:.2f})")
                     return self.place_order("Buy", position['size'])
-        
+                if price_change_pct >= self.stop_loss_threshold:
+                    self.logger.info(f"Stop-loss triggered for SHORT. Price change: {price_change_pct:.2f}%.")
+                    return self.place_order("Buy", position['size'])
+            
         else:
-            # No open positions, check if we should open one
-            if prediction['confidence'] > 65: # Only trade when confidence is high
-                # Calculate quantity based on order value
-                quantity = self.calculate_trade_quantity(current_price, self.order_value)
-                
-                if prediction['direction'] == 'up':
-                    self.logger.info(f"Opening LONG position based on AI prediction with {prediction['confidence']:.2f} confidence")
-                    return self.place_order("Buy", quantity)
-                else:
-                    self.logger.info(f"Opening SHORT position based on AI prediction with {prediction['confidence']:.2f} confidence")
-                    return self.place_order("Sell", quantity)
+            # No open positions
+            # [IMPROVEMENT] Evaluate confluence
+            if direction == 'up':
+                if self.should_open_long(df, confidence):
+                    quantity = self.calculate_risk_based_quantity(current_price)
+                    if quantity and quantity > 0:
+                        self.logger.info(f"Opening LONG. Confidence: {confidence:.2f}")
+                        return self.place_order("Buy", quantity)
+            else:
+                # direction == 'down'
+                if self.should_open_short(df, confidence):
+                    quantity = self.calculate_risk_based_quantity(current_price)
+                    if quantity and quantity > 0:
+                        self.logger.info(f"Opening SHORT. Confidence: {confidence:.2f}")
+                        return self.place_order("Sell", quantity)
         
-        # No trade executed
-        self.logger.info("No trade signals at this time")
+        self.logger.info("No trade signals at this time.")
         return True
 
     def run(self):
@@ -515,6 +616,7 @@ if __name__ == "__main__":
         interval_seconds=300,
         training_data_limit=2000,
         trading_interval='60',
-        quantity_step=0.001  # Add quantity_step parameter
+        quantity_step=0.001,  # Add quantity_step parameter
+        risk_per_trade=0.01  # Add risk_per_trade parameter
     )
     bot.run()
