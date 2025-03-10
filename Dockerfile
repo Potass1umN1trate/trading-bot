@@ -1,17 +1,14 @@
 # Use official Python image
-FROM python:3.10
+FROM python:3.10-slim
 
 # Set the working directory inside the container
 WORKDIR /app
 
-# Copy project files into the container
-COPY . .
-
 # Install dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt .
+RUN pip install --upgrade pip && pip install -r requirements.txt
 
-# Set environment variables (modify as needed)
-ENV PYTHONUNBUFFERED=1
+COPY . .
 
 # Command to run the bot (modify if needed)
 CMD ["python", "main.py"]

@@ -1,0 +1,8 @@
+version: "3.8"
+services:
+  trading-bot:
+    build: .
+    container_name: trading-bot
+    restart: always
+    volumes:
+      - ./:/app
