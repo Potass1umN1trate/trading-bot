@@ -211,7 +211,7 @@ class TradingBot:
 
     def create_labels(self, df):
         """Create target labels for AI training based on future price movement"""
-        # Calculate future price movement (1 hour ahead)
+        # Calculate future price movement (1 minute ahead)
         df['future_price'] = df['close'].shift(-self.prediction_horizon)
         df['price_direction'] = (df['future_price'] > df['close']).astype(int)
         

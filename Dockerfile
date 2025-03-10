@@ -5,10 +5,8 @@ FROM python:3.10-slim
 WORKDIR /app
 
 # Install dependencies
-COPY requirements.txt .
+COPY requirements.txt requirements.txt
 RUN pip install --upgrade pip && pip install -r requirements.txt
-
-COPY . .
 
 # Command to run the bot (modify if needed)
 CMD ["python", "main.py"]

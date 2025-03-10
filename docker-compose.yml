@@ -6,3 +6,5 @@ services:
     restart: always
     volumes:
       - ./:/app
+      - ./config.yaml:/app/config.yaml
+    command: python main.py
