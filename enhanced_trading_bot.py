@@ -5,7 +5,7 @@ import numpy as np
 from datetime import datetime, timedelta
 from pybit.unified_trading import HTTP
 from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.neural_network import MLPClassifier  # Replace RandomForest with MLPClassifier
 import joblib
 import os.path
 
@@ -245,25 +245,37 @@ class TradingBot:
         self.scaler = StandardScaler()
         X_scaled = self.scaler.fit_transform(X)
         
-        # Train model
-        self.model = RandomForestClassifier(n_estimators=100, random_state=42)
-        self.model.fit(X_scaled, y)
+        # Train model using MLPClassifier with partial_fit
+        self.model = MLPClassifier(
+            hidden_layer_sizes=(64, 32),  # Two hidden layers: 64 neurons, then 32
+            activation='relu',            # ReLU activation
+            solver='adam',                # Adam optimizer
+            max_iter=1,                   # We'll train in small steps
+            warm_start=True,              # Keep the model state between fits
+            random_state=42               # For reproducibility
+        )
+        self.model.partial_fit(X_scaled, y, classes=[0, 1])
         
         # Save model and scaler
         joblib.dump(self.model, 'trading_model.joblib')
         joblib.dump(self.scaler, 'scaler.joblib')
         
-        # Log feature importance
-        feature_importance = pd.DataFrame(
-            self.model.feature_importances_,
-            index=self.features,
-            columns=['importance']
-        ).sort_values('importance', ascending=False)
-        
-        self.logger.info("Model trained successfully")
-        self.logger.info(f"Feature importance:\n{feature_importance}")
-        
+        self.logger.info("Model partially fit on initial dataset.")
         return True
+
+    def incremental_retrain(self, X_new, y_new):
+        """Incrementally retrain the model with new data"""
+        if self.model is None or self.scaler is None:
+            self.logger.error("Model or scaler not initialized.")
+            return
+
+        # Scale the new data with the existing scaler
+        X_new_scaled = self.scaler.transform(X_new)
+        # Call partial_fit with classes=[0,1]
+        self.model.partial_fit(X_new_scaled, y_new, classes=[0, 1])
+        # Save the updated model
+        joblib.dump(self.model, 'trading_model.joblib')
+        self.logger.info("Incremental partial_fit completed.")
 
     def predict_price_direction(self):
         """Use the trained model to predict price direction"""
@@ -543,19 +555,39 @@ class TradingBot:
                 # If price went up enough, or new signal is strongly down, close
                 if price_change_pct >= self.profit_threshold or (direction == 'down' and confidence > 0.75):
                     self.logger.info(f"Closing LONG position. Price change: {price_change_pct:.2f}%, AI: {direction} ({confidence:.2f})")
-                    return self.place_order("Sell", position['size'])
+                    self.place_order("Sell", position['size'])
+                    # Incremental retrain with new data
+                    X_new = df.iloc[-1][self.features].values.reshape(1, -1)
+                    y_new = np.array([1 if price_change_pct >= self.profit_threshold else 0], dtype=int)
+                    self.incremental_retrain(X_new, y_new)
+                    return True
                 # If price dips below stop_loss_threshold, close
                 if price_change_pct <= self.stop_loss_threshold:
                     self.logger.info(f"Stop-loss triggered for LONG. Price change: {price_change_pct:.2f}%.")
-                    return self.place_order("Sell", position['size'])
+                    self.place_order("Sell", position['size'])
+                    # Incremental retrain with new data
+                    X_new = df.iloc[-1][self.features].values.reshape(1, -1)
+                    y_new = np.array([0], dtype=int)
+                    self.incremental_retrain(X_new, y_new)
+                    return True
             else:
                 # side == 'Sell'
                 if price_change_pct <= -self.profit_threshold or (direction == 'up' and confidence > 0.75):
                     self.logger.info(f"Closing SHORT position. Price change: {price_change_pct:.2f}%, AI: {direction} ({confidence:.2f})")
-                    return self.place_order("Buy", position['size'])
+                    self.place_order("Buy", position['size'])
+                    # Incremental retrain with new data
+                    X_new = df.iloc[-1][self.features].values.reshape(1, -1)
+                    y_new = np.array([1 if price_change_pct <= -self.profit_threshold else 0], dtype=int)
+                    self.incremental_retrain(X_new, y_new)
+                    return True
                 if price_change_pct >= self.stop_loss_threshold:
                     self.logger.info(f"Stop-loss triggered for SHORT. Price change: {price_change_pct:.2f}%.")
-                    return self.place_order("Buy", position['size'])
+                    self.place_order("Buy", position['size'])
+                    # Incremental retrain with new data
+                    X_new = df.iloc[-1][self.features].values.reshape(1, -1)
+                    y_new = np.array([0], dtype=int)
+                    self.incremental_retrain(X_new, y_new)
+                    return True
             
         else:
             # No open positions

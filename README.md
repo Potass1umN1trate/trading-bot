@@ -40,23 +40,23 @@ To build and run the trading bot using Docker Compose:
 
 1. Build the Docker image:
     ```sh
-    sudo docker-compose build
+    sudo docker compose build
     ```
 
 2. Run the Docker container:
     ```sh
-    sudo docker-compose up -d
+    sudo docker compose up -d
     ```
 
 3. To stop the Docker container:
     ```sh
-    sudo docker-compose down
+    sudo docker compose down
     ```
 
 4. To modify the application, make changes to the code and then rebuild and restart the container:
     ```sh
-    sudo docker-compose build
-    sudo docker-compose up -d
+    sudo docker compose build
+    sudo docker compose up -d
     ```
 
 ## Configuration
