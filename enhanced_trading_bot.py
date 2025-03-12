@@ -239,7 +239,7 @@ class TradingBot:
         
         # Prepare features and target
         X = df[self.features]
-        y = df['price_direction']
+        y = df['price_direction'].values  # Convert to NumPy array without index
         
         # Initialize and fit scaler
         self.scaler = StandardScaler()
@@ -268,6 +268,14 @@ class TradingBot:
         if self.model is None or self.scaler is None:
             self.logger.error("Model or scaler not initialized.")
             return
+
+        # temproary fix for the case when only one class is present in y_new
+        # Ensure y_new contains both classes
+        if len(np.unique(y_new)) == 1:  # Only one class present
+            y_fake = np.array([1 - y_new[0]])  # Add missing class
+            X_fake = np.zeros((1, X_new.shape[1]))  # Dummy input
+            X_new = np.vstack([X_new, X_fake])  # Stack fake X
+            y_new = np.append(y_new, y_fake)  # Append fake y
 
         # Scale the new data with the existing scaler
         X_new_scaled = self.scaler.transform(X_new)
