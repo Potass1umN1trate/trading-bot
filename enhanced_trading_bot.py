@@ -60,7 +60,7 @@ class TradingBot:
         
         # AI model parameters
         self.skipped_trades = 0  # Track how many times the bot skips trading
-        self.max_skipped_trades = 10  # Define a threshold for inaction punishment
+        self.max_skipped_trades = 3  # Define a threshold for inaction punishment
         self.lookback_period = lookback_period
         self.prediction_horizon = prediction_horizon
         self.features = features
