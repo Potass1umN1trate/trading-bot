@@ -59,6 +59,8 @@ class TradingBot:
         self.last_price = initial_price
         
         # AI model parameters
+        self.skipped_trades = 0  # Track how many times the bot skips trading
+        self.max_skipped_trades = 10  # Define a threshold for inaction punishment
         self.lookback_period = lookback_period
         self.prediction_horizon = prediction_horizon
         self.features = features
@@ -165,10 +167,13 @@ class TradingBot:
         Calculate technical indicators using adaptive settings based on trading interval.
         """
         if df is None or len(df) == 0:
+            self.logger.warning("calculate_indicators: Received empty or None dataframe.")
             return None
         
         df = df.copy()
         settings = self.get_indicator_settings()
+
+        self.logger.info(f"Calculating indicators with settings: {settings}")
 
         # RSI Calculation
         delta = df['close'].diff()
@@ -179,9 +184,13 @@ class TradingBot:
         rs = avg_gain / (avg_loss + 1e-10)  # Avoid division by zero
         df['rsi'] = 100 - (100 / (1 + rs))
 
+        self.logger.debug(f"RSI calculated: Last 5 values:\n{df['rsi'].tail()}")
+
         # MACD Calculation
         df['macd'] = df['close'].ewm(span=settings["macd_short"], adjust=False).mean() - df['close'].ewm(span=settings["macd_long"], adjust=False).mean()
         df['macd_signal'] = df['macd'].ewm(span=settings["macd_signal"], adjust=False).mean()
+
+        self.logger.debug(f"MACD calculated: Last 5 values:\n{df[['macd', 'macd_signal']].tail()}")
 
         # Bollinger Bands
         df['sma'] = df['close'].rolling(window=settings["bollinger_window"]).mean()
@@ -189,8 +198,12 @@ class TradingBot:
         df['bollinger_upper'] = df['sma'] + (df['std'] * 2)
         df['bollinger_lower'] = df['sma'] - (df['std'] * 2)
 
+        self.logger.debug(f"Bollinger Bands calculated: Last 5 values:\n{df[['bollinger_upper', 'bollinger_lower']].tail()}")
+
         # VWAP
         df['vwap'] = (df['volume'] * df['close']).cumsum() / df['volume'].cumsum()
+
+        self.logger.debug(f"VWAP calculated: Last 5 values:\n{df['vwap'].tail()}")
 
         # ATR (Average True Range for volatility)
         df['high_low'] = df['high'] - df['low']
@@ -199,6 +212,8 @@ class TradingBot:
         df['true_range'] = df[['high_low', 'high_close', 'low_close']].max(axis=1)
         df['atr'] = df['true_range'].rolling(window=14).mean()
 
+        self.logger.debug(f"ATR calculated: Last 5 values:\n{df['atr'].tail()}")
+
         # Momentum & Price Change
         df['momentum'] = df['close'].diff(4)
         df['price_change_1m'] = df['close'].pct_change(1) * 100
@@ -206,7 +221,12 @@ class TradingBot:
         df['price_change_15m'] = df['close'].pct_change(15) * 100
         df['volume_change'] = df['volume'].pct_change() * 100
 
+        self.logger.debug(f"Price changes calculated: Last 5 values:\n{df[['price_change_1m', 'price_change_5m', 'price_change_15m']].tail()}")
+
         df.dropna(inplace=True)
+
+        self.logger.info(f"Indicator calculation complete. DataFrame shape: {df.shape}")
+
         return df
 
     def create_labels(self, df):
@@ -292,7 +312,7 @@ class TradingBot:
             return None
         
         # Fetch recent data
-        df = self.fetch_market_data(interval='60', limit=30)
+        df = self.fetch_market_data(interval=self.trading_interval, limit=self.lookback_period)
         
         if df is None or len(df) == 0:
             return None
@@ -536,7 +556,7 @@ class TradingBot:
         position = self.check_open_positions()
         
         # [IMPROVEMENT] Fetch fresh data for confluence
-        df = self.fetch_market_data(interval=self.trading_interval, limit=50)
+        df = self.fetch_market_data(interval=self.trading_interval, limit=self.lookback_period)
         df = self.calculate_indicators(df)
         if df is None or len(df) < 5:
             self.logger.info("Not enough data to make a confluence-based decision.")
@@ -552,6 +572,8 @@ class TradingBot:
         
         if position:
             # We already have a position open
+            self.skipped_trades = 0
+
             entry_price = position['entry_price']
             side = position['side']  # 'Buy' or 'Sell'
             price_change_pct = ((current_price - entry_price) / entry_price) * 100
@@ -561,12 +583,14 @@ class TradingBot:
             
             if side == 'Buy':
                 # If price went up enough, or new signal is strongly down, close
-                if (direction == 'up' and confidence < 0.70) or (direction == 'down' and confidence > 0.50):
+                if price_change_pct >= self.profit_threshold or price_change_pct <= self.stop_loss_threshold or direction == 'down':
                     self.logger.info(f"Closing LONG position. Price change: {price_change_pct:.2f}%, AI: {direction} ({confidence:.2f})")
                     self.place_order("Sell", position['size'])
+                    #self.skipped_trades = 0
                     # Incremental retrain with new data
                     X_new = df.iloc[-1][self.features].values.reshape(1, -1)
-                    y_new = np.array([1 if price_change_pct >= 5 else 0], dtype=int)
+                    y_new = np.array([1 if price_change_pct >= self.profit_threshold else 0], dtype=int)
+                    self.logger.info(f"Incremental retrain with new data. Input shape: {X_new}, target shape: {y_new}")
                     self.incremental_retrain(X_new, y_new)
                     return True
                 # If price dips below stop_loss_threshold, close
@@ -580,12 +604,14 @@ class TradingBot:
                 #     return True
             else:
                 # side == 'Sell'
-                if (direction == 'down' and confidence < 0.70) or (direction == 'up' and confidence > 0.50):
+                if -price_change_pct >= self.profit_threshold or -price_change_pct <= self.stop_loss_threshold or direction == 'up':
                     self.logger.info(f"Closing SHORT position. Price change: {price_change_pct:.2f}%, AI: {direction} ({confidence:.2f})")
                     self.place_order("Buy", position['size'])
+                    #self.skipped_trades = 0
                     # Incremental retrain with new data
                     X_new = df.iloc[-1][self.features].values.reshape(1, -1)
-                    y_new = np.array([0 if -price_change_pct >= 5 else 1], dtype=int)
+                    y_new = np.array([0 if -price_change_pct >= self.profit_threshold else 1], dtype=int)
+                    self.logger.info(f"Incremental retrain with new data. Input shape: {X_new}, target shape: {y_new}")
                     self.incremental_retrain(X_new, y_new)
                     return True
                 # if price_change_pct >= self.stop_loss_threshold:
@@ -605,16 +631,37 @@ class TradingBot:
                     quantity = self.calculate_risk_based_quantity(current_price)
                     if quantity and quantity > 0:
                         self.logger.info(f"Opening LONG. Confidence: {confidence:.2f}")
+                        self.skipped_trades = 0
                         return self.place_order("Buy", quantity)
-            else:
-                # direction == 'down'
+            elif direction == 'down':
                 if confidence > 0.75: #self.should_open_short(df, confidence):
                     quantity = self.calculate_risk_based_quantity(current_price)
                     if quantity and quantity > 0:
                         self.logger.info(f"Opening SHORT. Confidence: {confidence:.2f}")
+                        self.skipped_trades = 0
                         return self.place_order("Sell", quantity)
         
         self.logger.info("No trade signals at this time.")
+
+        self.skipped_trades += 1
+        # If price moves significantly while bot stays inactive, penalize it
+        if self.skipped_trades >= self.max_skipped_trades:
+            last_movement = abs(df.iloc[-1]['price_change_5m'])  # Check 15m price change
+            punishment_threshold = 0.15  # Adjusted from 1.5% to 0.3% (can be tweaked)
+
+            if last_movement > punishment_threshold:
+                self.logger.warning(f"Missed a {last_movement:.2f}% price move! Penalizing model for inaction.")
+                
+                # The bot was inactive, so we assume it should have traded
+                X_penalty = df.iloc[-1][self.features].values.reshape(1, -1)
+
+                # If price moved UP, encourage an "UP" prediction next time
+                y_penalty = np.array([1]) if df.iloc[-1]['price_change_15m'] > 0 else np.array([0])
+
+                self.incremental_retrain(X_penalty, y_penalty)
+            else:
+                self.logger.info("No significant price movement while bot was inactive.")
+
         return True
 
     def run(self):
