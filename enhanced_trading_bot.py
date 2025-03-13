@@ -649,6 +649,8 @@ class TradingBot:
             last_movement = abs(df.iloc[-1]['price_change_5m'])  # Check 15m price change
             punishment_threshold = 0.15  # Adjusted from 1.5% to 0.3% (can be tweaked)
 
+            self.logger.info(f"Last price movement: {last_movement:.2f}%")
+
             if last_movement > punishment_threshold:
                 self.logger.warning(f"Missed a {last_movement:.2f}% price move! Penalizing model for inaction.")
                 
