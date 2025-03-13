@@ -647,7 +647,7 @@ class TradingBot:
         # If price moves significantly while bot stays inactive, penalize it
         if self.skipped_trades >= self.max_skipped_trades:
             last_movement = abs(df.iloc[-1]['price_change_5m'])  # Check 15m price change
-            punishment_threshold = 0.15  # Adjusted from 1.5% to 0.3% (can be tweaked)
+            punishment_threshold = self.profit_threshold  # Adjusted from 1.5% to 0.3% (can be tweaked)
 
             self.logger.info(f"Last price movement: {last_movement:.2f}%")
 
