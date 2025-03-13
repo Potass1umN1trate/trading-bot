@@ -561,54 +561,54 @@ class TradingBot:
             
             if side == 'Buy':
                 # If price went up enough, or new signal is strongly down, close
-                if price_change_pct >= self.profit_threshold or (direction == 'down' and confidence > 0.75):
+                if (direction == 'up' and confidence < 0.70) or (direction == 'down' and confidence > 0.50):
                     self.logger.info(f"Closing LONG position. Price change: {price_change_pct:.2f}%, AI: {direction} ({confidence:.2f})")
                     self.place_order("Sell", position['size'])
                     # Incremental retrain with new data
                     X_new = df.iloc[-1][self.features].values.reshape(1, -1)
-                    y_new = np.array([1 if price_change_pct >= self.profit_threshold else 0], dtype=int)
+                    y_new = np.array([1 if price_change_pct >= 5 else 0], dtype=int)
                     self.incremental_retrain(X_new, y_new)
                     return True
                 # If price dips below stop_loss_threshold, close
-                if price_change_pct <= self.stop_loss_threshold:
-                    self.logger.info(f"Stop-loss triggered for LONG. Price change: {price_change_pct:.2f}%.")
-                    self.place_order("Sell", position['size'])
-                    # Incremental retrain with new data
-                    X_new = df.iloc[-1][self.features].values.reshape(1, -1)
-                    y_new = np.array([0], dtype=int)
-                    self.incremental_retrain(X_new, y_new)
-                    return True
+                # if price_change_pct <= self.stop_loss_threshold:
+                #     self.logger.info(f"Stop-loss triggered for LONG. Price change: {price_change_pct:.2f}%.")
+                #     self.place_order("Sell", position['size'])
+                #     # Incremental retrain with new data
+                #     X_new = df.iloc[-1][self.features].values.reshape(1, -1)
+                #     y_new = np.array([0], dtype=int)
+                #     self.incremental_retrain(X_new, y_new)
+                #     return True
             else:
                 # side == 'Sell'
-                if price_change_pct <= -self.profit_threshold or (direction == 'up' and confidence > 0.75):
+                if (direction == 'down' and confidence < 0.70) or (direction == 'up' and confidence > 0.50):
                     self.logger.info(f"Closing SHORT position. Price change: {price_change_pct:.2f}%, AI: {direction} ({confidence:.2f})")
                     self.place_order("Buy", position['size'])
                     # Incremental retrain with new data
                     X_new = df.iloc[-1][self.features].values.reshape(1, -1)
-                    y_new = np.array([1 if price_change_pct <= -self.profit_threshold else 0], dtype=int)
+                    y_new = np.array([0 if -price_change_pct >= 5 else 1], dtype=int)
                     self.incremental_retrain(X_new, y_new)
                     return True
-                if price_change_pct >= self.stop_loss_threshold:
-                    self.logger.info(f"Stop-loss triggered for SHORT. Price change: {price_change_pct:.2f}%.")
-                    self.place_order("Buy", position['size'])
-                    # Incremental retrain with new data
-                    X_new = df.iloc[-1][self.features].values.reshape(1, -1)
-                    y_new = np.array([0], dtype=int)
-                    self.incremental_retrain(X_new, y_new)
-                    return True
+                # if price_change_pct >= self.stop_loss_threshold:
+                #     self.logger.info(f"Stop-loss triggered for SHORT. Price change: {price_change_pct:.2f}%.")
+                #     self.place_order("Buy", position['size'])
+                #     # Incremental retrain with new data
+                #     X_new = df.iloc[-1][self.features].values.reshape(1, -1)
+                #     y_new = np.array([0], dtype=int)
+                #     self.incremental_retrain(X_new, y_new)
+                #     return True
             
         else:
             # No open positions
             # [IMPROVEMENT] Evaluate confluence
             if direction == 'up':
-                if self.should_open_long(df, confidence):
+                if confidence > 0.75: #self.should_open_long(df, confidence):
                     quantity = self.calculate_risk_based_quantity(current_price)
                     if quantity and quantity > 0:
                         self.logger.info(f"Opening LONG. Confidence: {confidence:.2f}")
                         return self.place_order("Buy", quantity)
             else:
                 # direction == 'down'
-                if self.should_open_short(df, confidence):
+                if confidence > 0.75: #self.should_open_short(df, confidence):
                     quantity = self.calculate_risk_based_quantity(current_price)
                     if quantity and quantity > 0:
                         self.logger.info(f"Opening SHORT. Confidence: {confidence:.2f}")
