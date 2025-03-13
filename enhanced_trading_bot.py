@@ -558,7 +558,7 @@ class TradingBot:
         # [IMPROVEMENT] Fetch fresh data for confluence
         df = self.fetch_market_data(interval=self.trading_interval, limit=self.lookback_period)
         df = self.calculate_indicators(df)
-        if df is None or len(df) < 5:
+        if df is None or len(df) < self.prediction_horizon:
             self.logger.info("Not enough data to make a confluence-based decision.")
             return False
         
