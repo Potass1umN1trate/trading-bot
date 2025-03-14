@@ -599,7 +599,7 @@ class TradingBot:
             
             if side == 'Buy':
                 # If price went up enough, or new signal is strongly down, close
-                if (self.stop_price and current_price <= self.stop_price) or (not self.stop_price and price_change_pct <= self.profit_threshold):
+                if (self.stop_price and current_price <= self.stop_price) or (not self.stop_price and price_change_pct <= -self.profit_threshold):
                     self.logger.info(f"Closing LONG position. Price change: {price_change_pct:.2f}%, AI: {direction} ({confidence:.2f})")
                     self.place_order("Sell", position['size'])
                     #self.skipped_trades = 0
