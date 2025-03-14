@@ -30,7 +30,8 @@ class TradingBot:
         training_data_limit,
         trading_interval,
         quantity_step,  # Add quantity_step parameter
-        risk_per_trade=0.01  # Add risk_per_trade parameter
+        risk_per_trade=0.01,  # Add risk_per_trade parameter
+        trailing_stop_loss=0.075
     ):
         # Initialize logger
         self.setup_logger()
@@ -56,6 +57,7 @@ class TradingBot:
         self.dip_threshold = dip_threshold
         self.profit_threshold = profit_threshold
         self.stop_loss_threshold = stop_loss_threshold
+        self.trailing_stop_loss = trailing_stop_loss
         self.last_price = initial_price
         
         # AI model parameters
@@ -75,6 +77,7 @@ class TradingBot:
         
         # Initialize or load AI model
         self.initialize_model()
+        self.trailing_stop = None  # NEW: STORES TSL VALUE
 
     def setup_logger(self):
         """Configure logging with timestamps and rotation"""
@@ -559,7 +562,7 @@ class TradingBot:
         df = self.fetch_market_data(interval=self.trading_interval, limit=self.lookback_period)
         df = self.calculate_indicators(df)
         if df is None or len(df) < self.prediction_horizon:
-            self.logger.info("Not enough data to make a confluence-based decision.")
+            self.logger.info(f"Not enough data to make a confluence-based decision. Data length: {len(df)}")
             return False
         
         # [IMPROVEMENT] AI Prediction
@@ -576,14 +579,22 @@ class TradingBot:
 
             entry_price = position['entry_price']
             side = position['side']  # 'Buy' or 'Sell'
+            unrealized_pnl = position['unrealized_pnl']
             price_change_pct = ((current_price - entry_price) / entry_price) * 100
+
+            if unrealized_pnl > 0:
+                self.trailing_stop = entry_price - (entry_price * self.trailing_stop_loss) if side == "Buy" else entry_price + (entry_price * self.trailing_stop_loss)
+                self.logger.info(f"Initialized TSL at: {self.trailing_stop}")
+            else:
+                self.trailing_stop = entry_price - (entry_price * self.stop_loss_threshold) if side == "Buy" else entry_price + (entry_price * self.stop_loss_threshold)
+                self.logger.info(f"Initialized SL at: {self.trailing_stop}")
             
             # [IMPROVEMENT] Check if trailing stop or partial close is triggered
             # For demonstration, keep it simple:
             
             if side == 'Buy':
                 # If price went up enough, or new signal is strongly down, close
-                if price_change_pct >= self.profit_threshold or price_change_pct <= self.stop_loss_threshold:
+                if price_change_pct >= self.profit_threshold or current_price <= self.trailing_stop:
                     self.logger.info(f"Closing LONG position. Price change: {price_change_pct:.2f}%, AI: {direction} ({confidence:.2f})")
                     self.place_order("Sell", position['size'])
                     #self.skipped_trades = 0
@@ -604,7 +615,7 @@ class TradingBot:
                 #     return True
             else:
                 # side == 'Sell'
-                if -price_change_pct >= self.profit_threshold or -price_change_pct <= self.stop_loss_threshold:
+                if -price_change_pct >= self.profit_threshold or current_price >= self.stop_loss_threshold:
                     self.logger.info(f"Closing SHORT position. Price change: {price_change_pct:.2f}%, AI: {direction} ({confidence:.2f})")
                     self.place_order("Buy", position['size'])
                     #self.skipped_trades = 0
@@ -646,7 +657,7 @@ class TradingBot:
         self.skipped_trades += 1
         # If price moves significantly while bot stays inactive, penalize it
         if self.skipped_trades >= self.max_skipped_trades:
-            last_movement = abs(df.iloc[-1]['price_change_5m'])  # Check 15m price change
+            last_movement = abs(df.iloc[-1]['price_change_15m'])  # Check 15m price change
             punishment_threshold = self.profit_threshold  # Adjusted from 1.5% to 0.3% (can be tweaked)
 
             self.logger.info(f"Last price movement: {last_movement:.2f}%")
