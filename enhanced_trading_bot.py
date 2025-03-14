@@ -551,13 +551,48 @@ class TradingBot:
         
         return trailing_stop_price
 
+    # NEW: Helper method to close position and retrain model
+    def close_position(self, side, price_change_pct, df, confidence, direction, position):
+        if side == "Buy":
+            self.place_order("Sell", position['size'])
+            y_new = np.array([1 if price_change_pct >= self.profit_threshold else 0], dtype=int)
+        else:  # side == "Sell"
+            self.place_order("Buy", position['size'])
+            y_new = np.array([0 if -price_change_pct >= self.profit_threshold else 1], dtype=int)
+        X_new = df.iloc[-1][self.features].values.reshape(1, -1)
+        self.logger.info(f"Closing {side} position. Price change: {price_change_pct:.2f}%, AI: {direction} ({confidence:.2f})")
+        self.logger.info(f"Incremental retrain with new data. Input shape: {X_new}, target shape: {y_new}")
+        self.incremental_retrain(X_new, y_new)
+        return True
+
+    # NEW: Helper method to update trailing stop loss (TSL) value
+    def update_trailing_stop_value(self, side, current_price):
+        """
+        Update trailing stop loss based on the current price.
+        For Buy: new TSL = current_price * (1 - trailing_stop_loss/100)
+        For Sell: new TSL = current_price * (1 + trailing_stop_loss/100)
+        Updates if TSL is not set or if the new value improves the stop level.
+        """
+        if side == "Buy":
+            new_tsl = current_price * (1 - self.trailing_stop_loss / 100)
+            if self.stop_price is None or new_tsl > self.stop_price:
+                self.stop_price = new_tsl
+                self.logger.info(f"Updated TSL to: {self.stop_price}")
+                return True
+        else:
+            new_tsl = current_price * (1 + self.trailing_stop_loss / 100)
+            if self.stop_price is None or new_tsl < self.stop_price:
+                self.stop_price = new_tsl
+                self.logger.info(f"Updated TSL to: {self.stop_price}")
+                return True
+        return False
+
     def execute_trade_strategy(self):
         current_price = self.get_current_price()
         if not current_price:
             return False
         
         position = self.check_open_positions()
-        
         # [IMPROVEMENT] Fetch fresh data for confluence
         df = self.fetch_market_data(interval=self.trading_interval, limit=self.lookback_period)
         df = self.calculate_indicators(df)
@@ -574,60 +609,36 @@ class TradingBot:
         confidence = prediction['confidence']
         
         if position:
-            # We already have a position open
             self.skipped_trades = 0
-
             entry_price = position['entry_price']
             side = position['side']  # 'Buy' or 'Sell'
             unrealized_pnl = position['unrealized_pnl']
             price_change_pct = ((current_price - entry_price) / entry_price) * 100
-        
             self.logger.info(f"Current position: {side} {position['size']} at {entry_price}, PnL: {unrealized_pnl:.2f} USDT")
             self.logger.info(f"Current price change: {price_change_pct:.2f}%")
-
+            
             if unrealized_pnl > 1:
                 if self.stop_price is None:
-                    self.stop_price = current_price * (1 - self.trailing_stop_loss/100) if side == "Buy" else current_price * (1 + self.trailing_stop_loss/100)
+                    # Initialize TSL at the moment PnL becomes positive
+                    self.stop_price = (current_price * (1 - self.trailing_stop_loss / 100)
+                                       if side == "Buy"
+                                       else current_price * (1 + self.trailing_stop_loss / 100))
                     self.logger.info(f"Initialized TSL at: {self.stop_price}")
             else:
                 self.stop_price = None
-                # self.stop_price = entry_price * (1 - self.stop_loss_threshold/100) if side == "Buy" else entry_price * (1 + self.stop_loss_threshold/100)
-                # self.logger.info(f"Initialized SL at: {self.stop_price}")
-            
-            # [IMPROVEMENT] Check if trailing stop or partial close is triggered
-            # For demonstration, keep it simple:
             
             if side == 'Buy':
-                # If price went up enough, or new signal is strongly down, close
-                if (self.stop_price and current_price <= self.stop_price) or (not self.stop_price and price_change_pct <= -self.profit_threshold):
-                    self.logger.info(f"Closing LONG position. Price change: {price_change_pct:.2f}%, AI: {direction} ({confidence:.2f})")
-                    self.place_order("Sell", position['size'])
-                    #self.skipped_trades = 0
-                    # Incremental retrain with new data
-                    X_new = df.iloc[-1][self.features].values.reshape(1, -1)
-                    y_new = np.array([1 if price_change_pct >= self.profit_threshold else 0], dtype=int)
-                    self.logger.info(f"Incremental retrain with new data. Input shape: {X_new}, target shape: {y_new}")
-                    self.incremental_retrain(X_new, y_new)
-                    return True
-                elif self.stop_price and current_price > self.stop_price/(1 - self.trailing_stop_loss/100):
-                    self.stop_price = current_price * (1 - self.trailing_stop_loss/100)
-                    self.logger.info(f"Updated TSL to: {self.stop_price}")
+                if (self.stop_price and current_price <= self.stop_price) or \
+                   (not self.stop_price and price_change_pct <= -self.profit_threshold):
+                    return self.close_position(side, price_change_pct, df, confidence, direction, position)
+                else:
+                    self.update_trailing_stop_value(side, current_price)
             else:
-                # side == 'Sell'
-                if (self.stop_price and current_price >= self.stop_price) or (not self.stop_price and price_change_pct >= self.profit_threshold):
-                    self.logger.info(f"Closing SHORT position. Price change: {price_change_pct:.2f}%, AI: {direction} ({confidence:.2f})")
-                    self.place_order("Buy", position['size'])
-                    #self.skipped_trades = 0
-                    # Incremental retrain with new data
-                    X_new = df.iloc[-1][self.features].values.reshape(1, -1)
-                    y_new = np.array([0 if -price_change_pct >= self.profit_threshold else 1], dtype=int)
-                    self.logger.info(f"Incremental retrain with new data. Input shape: {X_new}, target shape: {y_new}")
-                    self.incremental_retrain(X_new, y_new)
-                    return True
-                elif self.stop_price and current_price < self.stop_price/(1 + self.trailing_stop_loss/100):
-                    self.stop_price = current_price * (1 + self.trailing_stop_loss/100)
-                    self.logger.info(f"Updated TSL to: {self.stop_price}")
-            
+                if (self.stop_price and current_price >= self.stop_price) or \
+                   (not self.stop_price and price_change_pct >= self.profit_threshold):
+                    return self.close_position(side, price_change_pct, df, confidence, direction, position)
+                else:
+                    self.update_trailing_stop_value(side, current_price)
         else:
             # No open positions
             # [IMPROVEMENT] Evaluate confluence
