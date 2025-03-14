@@ -77,7 +77,7 @@ class TradingBot:
         
         # Initialize or load AI model
         self.initialize_model()
-        self.trailing_stop = None  # NEW: STORES TSL VALUE
+        self.stop_price = None  # NEW: STORES TSL VALUE
 
     def setup_logger(self):
         """Configure logging with timestamps and rotation"""
@@ -187,13 +187,13 @@ class TradingBot:
         rs = avg_gain / (avg_loss + 1e-10)  # Avoid division by zero
         df['rsi'] = 100 - (100 / (1 + rs))
 
-        self.logger.debug(f"RSI calculated: Last 5 values:\n{df['rsi'].tail()}")
+        #self.logger.debug(f"RSI calculated: Last 5 values:\n{df['rsi'].tail()}")
 
         # MACD Calculation
         df['macd'] = df['close'].ewm(span=settings["macd_short"], adjust=False).mean() - df['close'].ewm(span=settings["macd_long"], adjust=False).mean()
         df['macd_signal'] = df['macd'].ewm(span=settings["macd_signal"], adjust=False).mean()
 
-        self.logger.debug(f"MACD calculated: Last 5 values:\n{df[['macd', 'macd_signal']].tail()}")
+        #self.logger.debug(f"MACD calculated: Last 5 values:\n{df[['macd', 'macd_signal']].tail()}")
 
         # Bollinger Bands
         df['sma'] = df['close'].rolling(window=settings["bollinger_window"]).mean()
@@ -201,12 +201,12 @@ class TradingBot:
         df['bollinger_upper'] = df['sma'] + (df['std'] * 2)
         df['bollinger_lower'] = df['sma'] - (df['std'] * 2)
 
-        self.logger.debug(f"Bollinger Bands calculated: Last 5 values:\n{df[['bollinger_upper', 'bollinger_lower']].tail()}")
+        #self.logger.debug(f"Bollinger Bands calculated: Last 5 values:\n{df[['bollinger_upper', 'bollinger_lower']].tail()}")
 
         # VWAP
         df['vwap'] = (df['volume'] * df['close']).cumsum() / df['volume'].cumsum()
 
-        self.logger.debug(f"VWAP calculated: Last 5 values:\n{df['vwap'].tail()}")
+        #self.logger.debug(f"VWAP calculated: Last 5 values:\n{df['vwap'].tail()}")
 
         # ATR (Average True Range for volatility)
         df['high_low'] = df['high'] - df['low']
@@ -215,7 +215,7 @@ class TradingBot:
         df['true_range'] = df[['high_low', 'high_close', 'low_close']].max(axis=1)
         df['atr'] = df['true_range'].rolling(window=14).mean()
 
-        self.logger.debug(f"ATR calculated: Last 5 values:\n{df['atr'].tail()}")
+        #self.logger.debug(f"ATR calculated: Last 5 values:\n{df['atr'].tail()}")
 
         # Momentum & Price Change
         df['momentum'] = df['close'].diff(4)
@@ -224,7 +224,7 @@ class TradingBot:
         df['price_change_15m'] = df['close'].pct_change(15) * 100
         df['volume_change'] = df['volume'].pct_change() * 100
 
-        self.logger.debug(f"Price changes calculated: Last 5 values:\n{df[['price_change_1m', 'price_change_5m', 'price_change_15m']].tail()}")
+        #self.logger.debug(f"Price changes calculated: Last 5 values:\n{df[['price_change_1m', 'price_change_5m', 'price_change_15m']].tail()}")
 
         df.dropna(inplace=True)
 
@@ -581,20 +581,25 @@ class TradingBot:
             side = position['side']  # 'Buy' or 'Sell'
             unrealized_pnl = position['unrealized_pnl']
             price_change_pct = ((current_price - entry_price) / entry_price) * 100
+        
+            self.logger.info(f"Current position: {side} {position['size']} at {entry_price}, PnL: {unrealized_pnl:.2f} USDT")
+            self.logger.info(f"Current price change: {price_change_pct:.2f}%")
 
-            if unrealized_pnl > 0:
-                self.trailing_stop = entry_price - (entry_price * self.trailing_stop_loss) if side == "Buy" else entry_price + (entry_price * self.trailing_stop_loss)
-                self.logger.info(f"Initialized TSL at: {self.trailing_stop}")
+            if unrealized_pnl > 1:
+                if self.stop_price is None:
+                    self.stop_price = current_price * (1 - self.trailing_stop_loss/100) if side == "Buy" else current_price * (1 + self.trailing_stop_loss/100)
+                    self.logger.info(f"Initialized TSL at: {self.stop_price}")
             else:
-                self.trailing_stop = entry_price - (entry_price * self.stop_loss_threshold) if side == "Buy" else entry_price + (entry_price * self.stop_loss_threshold)
-                self.logger.info(f"Initialized SL at: {self.trailing_stop}")
+                self.stop_price = None
+                # self.stop_price = entry_price * (1 - self.stop_loss_threshold/100) if side == "Buy" else entry_price * (1 + self.stop_loss_threshold/100)
+                # self.logger.info(f"Initialized SL at: {self.stop_price}")
             
             # [IMPROVEMENT] Check if trailing stop or partial close is triggered
             # For demonstration, keep it simple:
             
             if side == 'Buy':
                 # If price went up enough, or new signal is strongly down, close
-                if price_change_pct >= self.profit_threshold or current_price <= self.trailing_stop:
+                if (self.stop_price and current_price <= self.stop_price) or (not self.stop_price and price_change_pct <= self.profit_threshold):
                     self.logger.info(f"Closing LONG position. Price change: {price_change_pct:.2f}%, AI: {direction} ({confidence:.2f})")
                     self.place_order("Sell", position['size'])
                     #self.skipped_trades = 0
@@ -604,18 +609,12 @@ class TradingBot:
                     self.logger.info(f"Incremental retrain with new data. Input shape: {X_new}, target shape: {y_new}")
                     self.incremental_retrain(X_new, y_new)
                     return True
-                # If price dips below stop_loss_threshold, close
-                # if price_change_pct <= self.stop_loss_threshold:
-                #     self.logger.info(f"Stop-loss triggered for LONG. Price change: {price_change_pct:.2f}%.")
-                #     self.place_order("Sell", position['size'])
-                #     # Incremental retrain with new data
-                #     X_new = df.iloc[-1][self.features].values.reshape(1, -1)
-                #     y_new = np.array([0], dtype=int)
-                #     self.incremental_retrain(X_new, y_new)
-                #     return True
+                elif self.stop_price and current_price > self.stop_price/(1 - self.trailing_stop_loss/100):
+                    self.stop_price = current_price * (1 - self.trailing_stop_loss/100)
+                    self.logger.info(f"Updated TSL to: {self.stop_price}")
             else:
                 # side == 'Sell'
-                if -price_change_pct >= self.profit_threshold or current_price >= self.stop_loss_threshold:
+                if (self.stop_price and current_price >= self.stop_price) or (not self.stop_price and price_change_pct >= self.profit_threshold):
                     self.logger.info(f"Closing SHORT position. Price change: {price_change_pct:.2f}%, AI: {direction} ({confidence:.2f})")
                     self.place_order("Buy", position['size'])
                     #self.skipped_trades = 0
@@ -625,14 +624,9 @@ class TradingBot:
                     self.logger.info(f"Incremental retrain with new data. Input shape: {X_new}, target shape: {y_new}")
                     self.incremental_retrain(X_new, y_new)
                     return True
-                # if price_change_pct >= self.stop_loss_threshold:
-                #     self.logger.info(f"Stop-loss triggered for SHORT. Price change: {price_change_pct:.2f}%.")
-                #     self.place_order("Buy", position['size'])
-                #     # Incremental retrain with new data
-                #     X_new = df.iloc[-1][self.features].values.reshape(1, -1)
-                #     y_new = np.array([0], dtype=int)
-                #     self.incremental_retrain(X_new, y_new)
-                #     return True
+                elif self.stop_price and current_price < self.stop_price/(1 + self.trailing_stop_loss/100):
+                    self.stop_price = current_price * (1 + self.trailing_stop_loss/100)
+                    self.logger.info(f"Updated TSL to: {self.stop_price}")
             
         else:
             # No open positions
