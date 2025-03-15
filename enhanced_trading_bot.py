@@ -566,15 +566,14 @@ class TradingBot:
                 self.stop_price = new_tsl
                 self.logger.info(f"Updated TSL to: {self.stop_price}")
                 return True
-            self.logger.debug(f"Keeping TSL: {self.stop_price}, TSL difference percentage: {((self.stop_price - current_price) / current_price) * 100:.2f}%")
+            self.logger.debug(f"Keeping TSL: {self.stop_price}")
         else:
             new_tsl = current_price * (1 + self.trailing_stop_loss / 100)
             if self.stop_price and new_tsl < self.stop_price:
                 self.stop_price = new_tsl
                 self.logger.info(f"Updated TSL to: {self.stop_price}")
                 return True
-            self.logger.debug(f"Keeping TSL: {self.stop_price}, TSL difference percentage: {((self.stop_price - current_price) / current_price) * 100:.2f}%")
-
+            self.logger.debug(f"Keeping TSL: {self.stop_price}")
         return False
 
     def execute_trade_strategy(self):
