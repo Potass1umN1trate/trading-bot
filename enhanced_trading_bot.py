@@ -606,7 +606,7 @@ class TradingBot:
             self.logger.info(f"Current position: {side} {position['size']} at {entry_price}, PnL: {unrealized_pnl:.2f} USDT")
             self.logger.info(f"Current price change: {price_change_pct:.2f}%")
             
-            if unrealized_pnl > 0:
+            if unrealized_pnl > 0.5:
                 if self.stop_price is None:
                     # Initialize TSL at the moment PnL becomes positive
                     self.stop_price = (current_price * (1 - self.trailing_stop_loss / 100)
