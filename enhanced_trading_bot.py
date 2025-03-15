@@ -469,12 +469,14 @@ class TradingBot:
         # 3) Decide a stop-loss distance, e.g. use ATR or a fixed fraction:
         df = self.fetch_market_data(interval=self.trading_interval, limit=30)
         df = self.calculate_indicators(df)
-        if df is None or 'atr' not in df.columns:
-            self.logger.warning('No ATR available, fallback to fixed stop distance.')
-            stop_distance = current_price * 0.01  # e.g. 1% of price
-        else:
-            # Use last ATR value
-            stop_distance = df.iloc[-1]['atr']
+        # if df is None or 'atr' not in df.columns:
+        #     self.logger.warning('No ATR available, fallback to fixed stop distance.')
+        #     stop_distance = current_price * 0.01  # e.g. 1% of price
+        # else:
+        #     # Use last ATR value
+        #     stop_distance = df.iloc[-1]['atr']
+        #     self.logger.debug(f"Using ATR-based stop distance: {stop_distance}")
+        stop_distance = current_price * 0.01  # e.g. 1% of price
         
         # 4) Position size = risk_capital / (stop_distance)
         quantity = risk_capital / stop_distance
@@ -535,21 +537,6 @@ class TradingBot:
         
         return stop_loss, take_profit
 
-    def update_trailing_stop(self, side, entry_price, current_price, trailing_stop_price, trail_gap):
-        """
-        Move trailing stop up if current_price - trailing_stop_price > trail_gap for a long.
-        """
-        if side == 'Buy':
-            if (current_price - trailing_stop_price) >= trail_gap:
-                new_stop = current_price - trail_gap
-                return max(new_stop, entry_price)  # ensure not below entry
-        else:
-            # Opposite for short
-            if (trailing_stop_price - current_price) >= trail_gap:
-                new_stop = current_price + trail_gap
-                return min(new_stop, entry_price)
-        
-        return trailing_stop_price
 
     # NEW: Helper method to close position and retrain model
     def close_position(self, side, price_change_pct, df, confidence, direction, position):
@@ -575,16 +562,19 @@ class TradingBot:
         """
         if side == "Buy":
             new_tsl = current_price * (1 - self.trailing_stop_loss / 100)
-            if self.stop_price is None or new_tsl > self.stop_price:
+            if self.stop_price and new_tsl > self.stop_price:
                 self.stop_price = new_tsl
                 self.logger.info(f"Updated TSL to: {self.stop_price}")
                 return True
+            self.logger.debug(f"Keeping TSL: {self.stop_price}, TSL difference percentage: {((self.stop_price - current_price) / current_price) * 100:.2f}%")
         else:
             new_tsl = current_price * (1 + self.trailing_stop_loss / 100)
-            if self.stop_price is None or new_tsl < self.stop_price:
+            if self.stop_price and new_tsl < self.stop_price:
                 self.stop_price = new_tsl
                 self.logger.info(f"Updated TSL to: {self.stop_price}")
                 return True
+            self.logger.debug(f"Keeping TSL: {self.stop_price}, TSL difference percentage: {((self.stop_price - current_price) / current_price) * 100:.2f}%")
+
         return False
 
     def execute_trade_strategy(self):
@@ -617,7 +607,7 @@ class TradingBot:
             self.logger.info(f"Current position: {side} {position['size']} at {entry_price}, PnL: {unrealized_pnl:.2f} USDT")
             self.logger.info(f"Current price change: {price_change_pct:.2f}%")
             
-            if unrealized_pnl > 1:
+            if unrealized_pnl > 0:
                 if self.stop_price is None:
                     # Initialize TSL at the moment PnL becomes positive
                     self.stop_price = (current_price * (1 - self.trailing_stop_loss / 100)
@@ -626,6 +616,7 @@ class TradingBot:
                     self.logger.info(f"Initialized TSL at: {self.stop_price}")
             else:
                 self.stop_price = None
+                self.logger.info("Reset TSL due to negative PnL")
             
             if side == 'Buy':
                 if (self.stop_price and current_price <= self.stop_price) or \
