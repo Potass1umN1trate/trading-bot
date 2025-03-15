@@ -107,11 +107,11 @@ class TradingBot:
         scaler_path = 'scaler.joblib'
         
         if os.path.exists(model_path) and os.path.exists(scaler_path):
-            self.logger.info("Loading existing AI model and scaler")
+            self.logger.debug("Loading existing AI model and scaler")
             self.model = joblib.load(model_path)
             self.scaler = joblib.load(scaler_path)
         else:
-            self.logger.info("Training new AI model")
+            self.logger.debug("Training new AI model")
             self.train_model()
 
     def fetch_market_data(self, interval=None, limit=96):
@@ -144,7 +144,7 @@ class TradingBot:
             # Sort by timestamp in ascending order
             df = df.sort_values('timestamp')
             
-            self.logger.info(f"Fetched {len(df)} klines from Bybit")
+            self.logger.debug(f"Fetched {len(df)} klines from Bybit")
             return df
         
         except Exception as e:
@@ -176,7 +176,7 @@ class TradingBot:
         df = df.copy()
         settings = self.get_indicator_settings()
 
-        self.logger.info(f"Calculating indicators with settings: {settings}")
+        self.logger.debug(f"Calculating indicators with settings: {settings}")
 
         # RSI Calculation
         delta = df['close'].diff()
@@ -228,7 +228,7 @@ class TradingBot:
 
         df.dropna(inplace=True)
 
-        self.logger.info(f"Indicator calculation complete. DataFrame shape: {df.shape}")
+        self.logger.debug(f"Indicator calculation complete. DataFrame shape: {df.shape}")
 
         return df
 
@@ -356,7 +356,7 @@ class TradingBot:
                 return None
             
             balance = float(response['result']['list'][0]['coin'][0]['walletBalance'])
-            self.logger.info(f"Current wallet balance: {balance} USDT")
+            self.logger.debug(f"Current wallet balance: {balance} USDT")
             return balance
             
         except Exception as e:
@@ -564,14 +564,14 @@ class TradingBot:
             new_tsl = current_price * (1 - self.trailing_stop_loss / 100)
             if self.stop_price and new_tsl > self.stop_price:
                 self.stop_price = new_tsl
-                self.logger.info(f"Updated TSL to: {self.stop_price}")
+                self.logger.debug(f"Updated TSL to: {self.stop_price}")
                 return True
             self.logger.debug(f"Keeping TSL: {self.stop_price}")
         else:
             new_tsl = current_price * (1 + self.trailing_stop_loss / 100)
             if self.stop_price and new_tsl < self.stop_price:
                 self.stop_price = new_tsl
-                self.logger.info(f"Updated TSL to: {self.stop_price}")
+                self.logger.debug(f"Updated TSL to: {self.stop_price}")
                 return True
             self.logger.debug(f"Keeping TSL: {self.stop_price}")
         return False
@@ -586,7 +586,7 @@ class TradingBot:
         df = self.fetch_market_data(interval=self.trading_interval, limit=self.lookback_period)
         df = self.calculate_indicators(df)
         if df is None or len(df) < self.prediction_horizon:
-            self.logger.info(f"Not enough data to make a confluence-based decision. Data length: {len(df)}")
+            self.logger.warning(f"Not enough data to make a confluence-based decision. Data length: {len(df)}")
             return False
         
         # [IMPROVEMENT] AI Prediction
@@ -604,7 +604,7 @@ class TradingBot:
             unrealized_pnl = position['unrealized_pnl']
             price_change_pct = ((current_price - entry_price) / entry_price) * 100
             self.logger.info(f"Current position: {side} {position['size']} at {entry_price}, PnL: {unrealized_pnl:.2f} USDT")
-            self.logger.info(f"Current price change: {price_change_pct:.2f}%")
+            self.logger.debug(f"Current price change: {price_change_pct:.2f}%")
             
             if unrealized_pnl > 0.5:
                 if self.stop_price is None:
@@ -612,10 +612,10 @@ class TradingBot:
                     self.stop_price = (current_price * (1 - self.trailing_stop_loss / 100)
                                        if side == "Buy"
                                        else current_price * (1 + self.trailing_stop_loss / 100))
-                    self.logger.info(f"Initialized TSL at: {self.stop_price}")
+                    self.logger.debug(f"Initialized TSL at: {self.stop_price}")
             else:
                 self.stop_price = None
-                self.logger.info("Reset TSL due to negative PnL")
+                self.logger.debug("Reset TSL due to negative PnL")
             
             if side == 'Buy':
                 if (self.stop_price and current_price <= self.stop_price) or \
@@ -655,7 +655,7 @@ class TradingBot:
             last_movement = abs(df.iloc[-1]['price_change_15m'])  # Check 15m price change
             punishment_threshold = self.profit_threshold  # Adjusted from 1.5% to 0.3% (can be tweaked)
 
-            self.logger.info(f"Last price movement: {last_movement:.2f}%")
+            self.logger.debug(f"Last price movement: {last_movement:.2f}%")
 
             if last_movement > punishment_threshold:
                 self.logger.warning(f"Missed a {last_movement:.2f}% price move! Penalizing model for inaction.")
@@ -668,7 +668,7 @@ class TradingBot:
 
                 self.incremental_retrain(X_penalty, y_penalty)
             else:
-                self.logger.info("No significant price movement while bot was inactive.")
+                self.logger.debug("No significant price movement while bot was inactive.")
 
         return True
 
