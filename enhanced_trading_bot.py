@@ -653,7 +653,7 @@ class TradingBot:
             else:
                 if self.stop_price and current_price >= self.stop_price:
                     self.logger.info(f"TSL hit at {self.stop_price}. Closing SHORT position.")
-                    self.place_order("Sell", position['size'])
+                    self.place_order("Buy", position['size'])
                     # Changed to one-dimensional array
                     y_new = np.array([0], dtype=int)
                     X_new = df.iloc[-1][self.features].values.reshape(1, -1)
@@ -663,7 +663,7 @@ class TradingBot:
                     return True
                 elif price_change_pct <= -self.profit_threshold:
                     self.logger.info(f"Take profit hit {self.stop_price}. Closing SHORT position.")
-                    self.place_order("Sell", position['size'])
+                    self.place_order("Buy", position['size'])
                     # Changed to one-dimensional array
                     y_new = np.array([0], dtype=int)
                     X_new = df.iloc[-1][self.features].values.reshape(1, -1)
@@ -673,7 +673,7 @@ class TradingBot:
                     return True
                 elif not self.stop_price and price_change_pct >= self.profit_threshold:
                     self.logger.info(f"Stop loss hit at {current_price}. Closing SHORT position.")
-                    self.place_order("Sell", position['size'])
+                    self.place_order("Buy", position['size'])
                     # Changed to one-dimensional array
                     y_new = np.array([1], dtype=int)
                     X_new = df.iloc[-1][self.features].values.reshape(1, -1)
