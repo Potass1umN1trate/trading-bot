@@ -82,15 +82,15 @@ class TradingBot:
     def setup_logger(self):
         """Configure logging with timestamps and rotation"""
         self.logger = logging.getLogger('trading_bot')
-        self.logger.setLevel(logging.DEBUG)
+        self.logger.setLevel(logging.INFO)
         
         # Create a file handler that logs even debug messages
         file_handler = logging.FileHandler('trading_bot.log')
-        file_handler.setLevel(logging.DEBUG)
+        file_handler.setLevel(logging.INFO)
         
         # Create console handler with a higher log level
         console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.DEBUG)
+        console_handler.setLevel(logging.INFO)
         
         # Create formatter and add it to the handlers
         formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -139,7 +139,7 @@ class TradingBot:
                 df[col] = pd.to_numeric(df[col])
             
             # Convert timestamp to datetime
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            df['timestamp'] = pd.to_datetime(pd.to_numeric(df['timestamp']), unit='ms')
             
             # Sort by timestamp in ascending order
             df = df.sort_values('timestamp')
@@ -564,16 +564,16 @@ class TradingBot:
             new_tsl = current_price * (1 - self.trailing_stop_loss / 100)
             if self.stop_price and new_tsl > self.stop_price:
                 self.stop_price = new_tsl
-                self.logger.debug(f"Updated TSL to: {self.stop_price}")
+                self.logger.info(f"Updated TSL to: {self.stop_price}")
                 return True
-            self.logger.debug(f"Keeping TSL: {self.stop_price}")
+            self.logger.info(f"Keeping TSL: {self.stop_price}")
         else:
             new_tsl = current_price * (1 + self.trailing_stop_loss / 100)
             if self.stop_price and new_tsl < self.stop_price:
                 self.stop_price = new_tsl
-                self.logger.debug(f"Updated TSL to: {self.stop_price}")
+                self.logger.info(f"Updated TSL to: {self.stop_price}")
                 return True
-            self.logger.debug(f"Keeping TSL: {self.stop_price}")
+            self.logger.info(f"Keeping TSL: {self.stop_price}")
         return False
 
     def execute_trade_strategy(self):
@@ -606,27 +606,81 @@ class TradingBot:
             self.logger.info(f"Current position: {side} {position['size']} at {entry_price}, PnL: {unrealized_pnl:.2f} USDT")
             self.logger.debug(f"Current price change: {price_change_pct:.2f}%")
             
-            if unrealized_pnl > 0.5:
+            if unrealized_pnl > (current_price * position['size'] * 0.055 / 100 + 0.01):
                 if self.stop_price is None:
                     # Initialize TSL at the moment PnL becomes positive
                     self.stop_price = (current_price * (1 - self.trailing_stop_loss / 100)
                                        if side == "Buy"
                                        else current_price * (1 + self.trailing_stop_loss / 100))
-                    self.logger.debug(f"Initialized TSL at: {self.stop_price}")
+                    self.logger.info(f"Initialized TSL at: {self.stop_price}")
             else:
                 self.stop_price = None
-                self.logger.debug("Reset TSL due to negative PnL")
+                self.logger.info("Reset TSL due to negative PnL")
             
             if side == 'Buy':
-                if (self.stop_price and current_price <= self.stop_price) or \
-                   (not self.stop_price and price_change_pct <= -self.profit_threshold):
-                    return self.close_position(side, price_change_pct, df, confidence, direction, position)
+                if self.stop_price and current_price <= self.stop_price:
+                    self.logger.info(f"TSL hit at {self.stop_price}. Closing LONG position.")
+                    self.place_order("Sell", position['size'])
+                    # Changed to one-dimensional array
+                    y_new = np.array([1], dtype=int)
+                    X_new = df.iloc[-1][self.features].values.reshape(1, -1)
+                    self.logger.info(f"Prediction was successful. PnL: {unrealized_pnl:.2f} USDT")
+                    self.logger.info(f"Incremental retrain with new data. Input shape: {X_new}, target shape: {y_new}")
+                    self.incremental_retrain(X_new, y_new)
+                    return True
+                elif price_change_pct >= self.profit_threshold:
+                    self.logger.info(f"Take profit hit {self.stop_price}. Closing LONG position.")
+                    self.place_order("Sell", position['size'])
+                    # Changed to one-dimensional array
+                    y_new = np.array([1], dtype=int)
+                    X_new = df.iloc[-1][self.features].values.reshape(1, -1)
+                    self.logger.info(f"Prediction was successful. PnL: {unrealized_pnl:.2f} USDT")
+                    self.logger.info(f"Incremental retrain with new data. Input shape: {X_new}, target shape: {y_new}")
+                    self.incremental_retrain(X_new, y_new)
+                    return True
+                elif not self.stop_price and price_change_pct <= -self.stop_loss_threshold:
+                    self.logger.info(f"Stop loss hit at {current_price}. Closing LONG position.")
+                    self.place_order("Sell", position['size'])
+                    # Changed to one-dimensional array
+                    y_new = np.array([0], dtype=int)
+                    X_new = df.iloc[-1][self.features].values.reshape(1, -1)
+                    self.logger.warning(f"Prediction was wrong. PnL: {unrealized_pnl:.2f} USDT")
+                    self.logger.info(f"Incremental retrain with new data. Input shape: {X_new}, target shape: {y_new}")
+                    self.incremental_retrain(X_new, y_new)
+                    return True
                 else:
                     self.update_trailing_stop_value(side, current_price)
             else:
-                if (self.stop_price and current_price >= self.stop_price) or \
-                   (not self.stop_price and price_change_pct >= self.profit_threshold):
-                    return self.close_position(side, price_change_pct, df, confidence, direction, position)
+                if self.stop_price and current_price >= self.stop_price:
+                    self.logger.info(f"TSL hit at {self.stop_price}. Closing SHORT position.")
+                    self.place_order("Sell", position['size'])
+                    # Changed to one-dimensional array
+                    y_new = np.array([0], dtype=int)
+                    X_new = df.iloc[-1][self.features].values.reshape(1, -1)
+                    self.logger.info(f"Prediction was successful. PnL: {unrealized_pnl:.2f} USDT")
+                    self.logger.info(f"Incremental retrain with new data. Input shape: {X_new}, target shape: {y_new}")
+                    self.incremental_retrain(X_new, y_new)
+                    return True
+                elif price_change_pct <= -self.profit_threshold:
+                    self.logger.info(f"Take profit hit {self.stop_price}. Closing SHORT position.")
+                    self.place_order("Sell", position['size'])
+                    # Changed to one-dimensional array
+                    y_new = np.array([0], dtype=int)
+                    X_new = df.iloc[-1][self.features].values.reshape(1, -1)
+                    self.logger.info(f"Prediction was successful. PnL: {unrealized_pnl:.2f} USDT")
+                    self.logger.info(f"Incremental retrain with new data. Input shape: {X_new}, target shape: {y_new}")
+                    self.incremental_retrain(X_new, y_new)
+                    return True
+                elif not self.stop_price and price_change_pct >= self.profit_threshold:
+                    self.logger.info(f"Stop loss hit at {current_price}. Closing SHORT position.")
+                    self.place_order("Sell", position['size'])
+                    # Changed to one-dimensional array
+                    y_new = np.array([1], dtype=int)
+                    X_new = df.iloc[-1][self.features].values.reshape(1, -1)
+                    self.logger.warning(f"Prediction was wrong. PnL: {unrealized_pnl:.2f} USDT")
+                    self.logger.info(f"Incremental retrain with new data. Input shape: {X_new}, target shape: {y_new}")
+                    self.incremental_retrain(X_new, y_new)
+                    return True
                 else:
                     self.update_trailing_stop_value(side, current_price)
         else:
