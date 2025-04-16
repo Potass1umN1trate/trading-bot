@@ -5,7 +5,7 @@ import numpy as np
 from datetime import datetime, timedelta
 from pybit.unified_trading import HTTP
 from sklearn.preprocessing import StandardScaler
-from sklearn.neural_network import MLPClassifier  # Replace RandomForest with MLPClassifier
+from sklearn.neural_network import MLPClassifier
 import joblib
 import os.path
 
@@ -17,101 +17,88 @@ class TradingBot:
         bybit_url,
         symbol,
         category,
-        order_value,
-        upward_trend_threshold,
-        dip_threshold,
         profit_threshold,
         stop_loss_threshold,
-        initial_price,
         lookback_period,
         prediction_horizon,
-        features,
+        features,  # Expecting raw features: ['open', 'high', 'low', 'close', 'volume']
         interval_seconds,
         training_data_limit,
         trading_interval,
-        quantity_step,  # Add quantity_step parameter
-        risk_per_trade=0.01,  # Add risk_per_trade parameter
+        quantity_step,
+        risk_per_trade=0.01,
         trailing_stop_loss=0.075
     ):
         # Initialize logger
         self.setup_logger()
-        
+
         # Initialize the Bybit client
         self.client = HTTP(
-            testnet=False,
+            testnet=False,  # Set to True for testnet trading
             api_key=bybit_api_key,
             api_secret=bybit_api_secret,
-            demo=True
+            demo=True  # Set to False for live trading if testnet=False
         )
-        self.logger.info(f"Using Bybit API URL: {bybit_url}")
-        
+        self.logger.info(f"Using Bybit API URL: {self.client.endpoint}")
+
         # Trading parameters
         self.symbol = symbol
         self.category = category
-        self.order_value = order_value
         self.position_size = 0
         self.current_position = None
-        
+
         # Load trading thresholds
-        self.upward_trend_threshold = upward_trend_threshold
-        self.dip_threshold = dip_threshold
         self.profit_threshold = profit_threshold
         self.stop_loss_threshold = stop_loss_threshold
         self.trailing_stop_loss = trailing_stop_loss
-        self.last_price = initial_price
-        
+
         # AI model parameters
-        self.skipped_trades = 0  # Track how many times the bot skips trading
-        self.max_skipped_trades = 3  # Define a threshold for inaction punishment
+        self.skipped_trades = 0
+        self.max_skipped_trades = 3
         self.lookback_period = lookback_period
         self.prediction_horizon = prediction_horizon
+        # --- Use raw features ---
         self.features = features
+        self.logger.info(f"Using features: {self.features}")
         self.model = None
         self.scaler = None
 
         self.interval_seconds = interval_seconds
         self.training_data_limit = training_data_limit
         self.trading_interval = trading_interval
-        self.quantity_step = quantity_step  # Initialize quantity_step
-        self.risk_per_trade = risk_per_trade  # Initialize risk_per_trade
-        
+        self.quantity_step = quantity_step
+        self.risk_per_trade = risk_per_trade
+
         # Initialize or load AI model
         self.initialize_model()
-        self.stop_price = None  # NEW: STORES TSL VALUE
+        self.stop_price = None  # Stores TSL value
 
     def setup_logger(self):
         """Configure logging with timestamps and rotation"""
         self.logger = logging.getLogger('trading_bot')
-        self.logger.setLevel(logging.INFO)
-        
-        # Create a file handler that logs even debug messages
-        file_handler = logging.FileHandler('trading_bot.log')
-        file_handler.setLevel(logging.INFO)
-        
-        # Create console handler with a higher log level
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.INFO)
-        
-        # Create formatter and add it to the handlers
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        file_handler.setFormatter(formatter)
-        console_handler.setFormatter(formatter)
-        
-        # Add the handlers to the logger
-        self.logger.addHandler(file_handler)
-        self.logger.addHandler(console_handler)
+        if not self.logger.hasHandlers():
+            self.logger.setLevel(logging.INFO)
+            file_handler = logging.FileHandler('trading_bot.log')
+            file_handler.setLevel(logging.INFO)
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(logging.INFO)
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            file_handler.setFormatter(formatter)
+            console_handler.setFormatter(formatter)
+            self.logger.addHandler(file_handler)
+            self.logger.addHandler(console_handler)
 
     def initialize_model(self):
         """Initialize or load AI model"""
-        model_path = 'trading_model.joblib'
-        scaler_path = 'scaler.joblib'
+        model_path = 'trading_model_raw.joblib'
+        scaler_path = 'scaler_raw.joblib'
         
         if os.path.exists(model_path) and os.path.exists(scaler_path):
-            self.logger.debug("Loading existing AI model and scaler")
+            self.logger.info(f"Loading existing RAW AI model from {model_path} and scaler from {scaler_path}")
             self.model = joblib.load(model_path)
             self.scaler = joblib.load(scaler_path)
         else:
-            self.logger.debug("Training new AI model")
+            self.logger.info("No existing raw model found. Training new RAW AI model.")
             self.train_model()
 
     def fetch_market_data(self, interval=None, limit=96):
@@ -125,240 +112,152 @@ class TradingBot:
                 interval=interval,
                 limit=limit
             )
-            
             if response['retCode'] != 0:
                 self.logger.error(f"Error fetching kline data: {response['retMsg']}")
                 return None
-            
-            # Convert to DataFrame
+
             klines = response['result']['list']
+            if not klines:
+                self.logger.warning("Fetched 0 klines from Bybit.")
+                return None
+
             df = pd.DataFrame(klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'turnover'])
-            
-            # Convert types
             for col in ['open', 'high', 'low', 'close', 'volume', 'turnover']:
                 df[col] = pd.to_numeric(df[col])
-            
-            # Convert timestamp to datetime
             df['timestamp'] = pd.to_datetime(pd.to_numeric(df['timestamp']), unit='ms')
-            
-            # Sort by timestamp in ascending order
-            df = df.sort_values('timestamp')
-            
-            self.logger.debug(f"Fetched {len(df)} klines from Bybit")
+            df = df.sort_values('timestamp').reset_index(drop=True)
+            self.logger.debug(f"Fetched {len(df)} klines from Bybit. Last timestamp: {df['timestamp'].iloc[-1]}")
             return df
-        
         except Exception as e:
             self.logger.error(f"Error fetching market data: {str(e)}")
             return None
 
-    def get_indicator_settings(self):
-        """
-        Dynamically adjusts indicator parameters based on the selected trading interval.
-        """
-        interval = int(self.trading_interval)  # Convert to integer
-        if interval == 1:
-            return {"rsi_period": 7, "macd_short": 6, "macd_long": 13, "macd_signal": 5, "bollinger_window": 10}
-        elif interval <= 15:
-            return {"rsi_period": 14, "macd_short": 12, "macd_long": 26, "macd_signal": 9, "bollinger_window": 20}
-        elif interval <= 60:
-            return {"rsi_period": 21, "macd_short": 26, "macd_long": 50, "macd_signal": 9, "bollinger_window": 30}
-        else:
-            return {"rsi_period": 21, "macd_short": 50, "macd_long": 100, "macd_signal": 9, "bollinger_window": 50}
-
-    def calculate_indicators(self, df):
-        """
-        Calculate technical indicators using adaptive settings based on trading interval.
-        """
-        if df is None or len(df) == 0:
-            self.logger.warning("calculate_indicators: Received empty or None dataframe.")
-            return None
-        
-        df = df.copy()
-        settings = self.get_indicator_settings()
-
-        self.logger.debug(f"Calculating indicators with settings: {settings}")
-
-        # RSI Calculation
-        delta = df['close'].diff()
-        gain = np.where(delta > 0, delta, 0)
-        loss = np.where(delta < 0, -delta, 0)
-        avg_gain = pd.Series(gain).rolling(window=settings["rsi_period"], min_periods=1).mean()
-        avg_loss = pd.Series(loss).rolling(window=settings["rsi_period"], min_periods=1).mean()
-        rs = avg_gain / (avg_loss + 1e-10)  # Avoid division by zero
-        df['rsi'] = 100 - (100 / (1 + rs))
-
-        #self.logger.debug(f"RSI calculated: Last 5 values:\n{df['rsi'].tail()}")
-
-        # MACD Calculation
-        df['macd'] = df['close'].ewm(span=settings["macd_short"], adjust=False).mean() - df['close'].ewm(span=settings["macd_long"], adjust=False).mean()
-        df['macd_signal'] = df['macd'].ewm(span=settings["macd_signal"], adjust=False).mean()
-
-        #self.logger.debug(f"MACD calculated: Last 5 values:\n{df[['macd', 'macd_signal']].tail()}")
-
-        # Bollinger Bands
-        df['sma'] = df['close'].rolling(window=settings["bollinger_window"]).mean()
-        df['std'] = df['close'].rolling(window=settings["bollinger_window"]).std()
-        df['bollinger_upper'] = df['sma'] + (df['std'] * 2)
-        df['bollinger_lower'] = df['sma'] - (df['std'] * 2)
-
-        #self.logger.debug(f"Bollinger Bands calculated: Last 5 values:\n{df[['bollinger_upper', 'bollinger_lower']].tail()}")
-
-        # VWAP
-        df['vwap'] = (df['volume'] * df['close']).cumsum() / df['volume'].cumsum()
-
-        #self.logger.debug(f"VWAP calculated: Last 5 values:\n{df['vwap'].tail()}")
-
-        # ATR (Average True Range for volatility)
-        df['high_low'] = df['high'] - df['low']
-        df['high_close'] = np.abs(df['high'] - df['close'].shift())
-        df['low_close'] = np.abs(df['low'] - df['close'].shift())
-        df['true_range'] = df[['high_low', 'high_close', 'low_close']].max(axis=1)
-        df['atr'] = df['true_range'].rolling(window=14).mean()
-
-        #self.logger.debug(f"ATR calculated: Last 5 values:\n{df['atr'].tail()}")
-
-        # Momentum & Price Change
-        df['momentum'] = df['close'].diff(4)
-        df['price_change_1m'] = df['close'].pct_change(1) * 100
-        df['price_change_5m'] = df['close'].pct_change(5) * 100
-        df['price_change_15m'] = df['close'].pct_change(15) * 100
-        df['volume_change'] = df['volume'].pct_change() * 100
-
-        #self.logger.debug(f"Price changes calculated: Last 5 values:\n{df[['price_change_1m', 'price_change_5m', 'price_change_15m']].tail()}")
-
-        df.dropna(inplace=True)
-
-        self.logger.debug(f"Indicator calculation complete. DataFrame shape: {df.shape}")
-
-        return df
-
     def create_labels(self, df):
         """Create target labels for AI training based on future price movement"""
-        # Calculate future price movement (1 minute ahead)
+        df = df.copy()
         df['future_price'] = df['close'].shift(-self.prediction_horizon)
-        df['price_direction'] = (df['future_price'] > df['close']).astype(int)
-        
-        # Remove rows with NaN values (last rows won't have future data)
-        df.dropna(inplace=True)
-        
+        df['price_direction'] = np.where(df['future_price'] > df['close'], 1, 0)
+        df.dropna(subset=['future_price'], inplace=True)
+        df.dropna(subset=self.features + ['price_direction'], inplace=True)
+        self.logger.debug(f"Labels created. DataFrame shape after labeling and dropna: {df.shape}")
         return df
 
     def train_model(self):
-        """Train the AI prediction model"""
-        # Fetch historical data
-        df = self.fetch_market_data(interval=self.trading_interval, limit=self.training_data_limit)  # Get more data for training
-        
-        if df is None or len(df) < 100:
-            self.logger.error("Not enough data to train the model")
+        """Train the AI prediction model using RAW data"""
+        model_path = 'trading_model_raw.joblib'
+        scaler_path = 'scaler_raw.joblib'
+        self.logger.info(f"Fetching data for initial RAW model training (limit={self.training_data_limit})...")
+        df = self.fetch_market_data(interval=self.trading_interval, limit=self.training_data_limit)
+        if df is None or len(df) < self.lookback_period + self.prediction_horizon + 50:
+            self.logger.error(f"Not enough data to train the RAW model. Fetched {len(df) if df is not None else 0} rows.")
             return False
-        
-        # Calculate indicators and create labels
-        df = self.calculate_indicators(df)
         df = self.create_labels(df)
-        
-        if df is None or len(df) == 0:
-            self.logger.error("Failed to prepare training data")
+        if df is None or df.empty or len(df) < 50:
+            self.logger.error("Failed to prepare sufficient training data after labeling.")
             return False
-        
-        # Prepare features and target
+        self.logger.info(f"Preparing features: {self.features}")
         X = df[self.features]
-        y = df['price_direction'].values  # Convert to NumPy array without index
-        
-        # Initialize and fit scaler
+        y = df['price_direction'].values
         self.scaler = StandardScaler()
         X_scaled = self.scaler.fit_transform(X)
-        
-        # Train model using MLPClassifier with partial_fit
+        self.logger.info(f"Scaler fitted on {X_scaled.shape[0]} samples.")
         self.model = MLPClassifier(
-            hidden_layer_sizes=(64, 32),  # Two hidden layers: 64 neurons, then 32
-            activation='relu',            # ReLU activation
-            solver='adam',                # Adam optimizer
-            max_iter=1,                   # We'll train in small steps
-            warm_start=True,              # Keep the model state between fits
-            random_state=42               # For reproducibility
+            hidden_layer_sizes=(64, 32),
+            activation='relu',
+            solver='adam',
+            max_iter=1,
+            warm_start=True,
+            random_state=42,
+            learning_rate_init=0.001
         )
-        self.model.partial_fit(X_scaled, y, classes=[0, 1])
-        
-        # Save model and scaler
-        joblib.dump(self.model, 'trading_model.joblib')
-        joblib.dump(self.scaler, 'scaler.joblib')
-        
-        self.logger.info("Model partially fit on initial dataset.")
+        self.logger.info("Starting initial partial_fit on MLPClassifier...")
+        self.model.partial_fit(X_scaled, y, classes=np.array([0, 1]))
+        self.logger.info("Initial partial_fit complete.")
+        joblib.dump(self.model, model_path)
+        joblib.dump(self.scaler, scaler_path)
+        self.logger.info(f"RAW Model saved to {model_path}, Scaler saved to {scaler_path}")
         return True
 
     def incremental_retrain(self, X_new, y_new):
-        """Incrementally retrain the model with new data"""
+        """Incrementally retrain the model with new RAW data"""
+        model_path = 'trading_model_raw.joblib'
         if self.model is None or self.scaler is None:
-            self.logger.error("Model or scaler not initialized.")
+            self.logger.error("Model or scaler not initialized for incremental retrain.")
             return
-
-        # temproary fix for the case when only one class is present in y_new
-        # Ensure y_new contains both classes
-        if len(np.unique(y_new)) == 1:  # Only one class present
-            y_fake = np.array([1 - y_new[0]])  # Add missing class
-            X_fake = np.zeros((1, X_new.shape[1]))  # Dummy input
-            X_new = np.vstack([X_new, X_fake])  # Stack fake X
-            y_new = np.append(y_new, y_fake)  # Append fake y
-
-        # Scale the new data with the existing scaler
-        X_new_scaled = self.scaler.transform(X_new)
-        # Call partial_fit with classes=[0,1]
-        self.model.partial_fit(X_new_scaled, y_new, classes=[0, 1])
-        # Save the updated model
-        joblib.dump(self.model, 'trading_model.joblib')
-        self.logger.info("Incremental partial_fit completed.")
+        y_new = np.asarray(y_new)
+        if X_new.ndim == 1:
+            X_new = X_new.reshape(1, -1)
+        unique_classes = np.unique(y_new)
+        classes_to_fit = np.array([0, 1])
+        if len(unique_classes) == 0:
+            self.logger.warning("incremental_retrain called with empty y_new. Skipping.")
+            return
+        elif len(unique_classes) == 1:
+            self.logger.warning(f"incremental_retrain called with only one class ({unique_classes[0]}) in y_new. Still fitting with classes [0, 1].")
+        try:
+            X_new_scaled = self.scaler.transform(X_new)
+            self.model.partial_fit(X_new_scaled, y_new, classes=classes_to_fit)
+            joblib.dump(self.model, model_path)
+            self.logger.info(f"Incremental partial_fit completed. Model saved to {model_path}")
+        except Exception as e:
+            self.logger.error(f"Error during incremental retrain: {e}")
 
     def predict_price_direction(self):
-        """Use the trained model to predict price direction"""
+        """Use the trained model to predict price direction using RAW data"""
         if self.model is None or self.scaler is None:
-            self.logger.error("Model not initialized")
+            self.logger.error("Model or Scaler not initialized for prediction.")
             return None
-        
-        # Fetch recent data
         df = self.fetch_market_data(interval=self.trading_interval, limit=self.lookback_period)
-        
-        if df is None or len(df) == 0:
+        if df is None or df.empty:
+            self.logger.warning("Failed to fetch data for prediction or data was empty.")
             return None
-        
-        # Calculate indicators
-        df = self.calculate_indicators(df)
-        
-        if df is None or len(df) < 5:  # Need enough data for features
+        if len(df) == 0:
+            self.logger.warning("DataFrame is empty after fetching, cannot get latest data for prediction.")
             return None
-        
-        # Get latest data point
-        latest_data = df.iloc[-1][self.features].values.reshape(1, -1)
-        
-        # Scale features
-        scaled_data = self.scaler.transform(latest_data)
-        
-        # Make prediction (1 = up, 0 = down)
-        prediction = self.model.predict(scaled_data)[0]
-        probability = self.model.predict_proba(scaled_data)[0]
-        
-        prediction_confidence = probability[1] if prediction == 1 else probability[0]
-        
-        self.logger.info(f"AI prediction: {'UP' if prediction == 1 else 'DOWN'} with {prediction_confidence:.2f} confidence")
-        
-        return {
-            'direction': 'up' if prediction == 1 else 'down',
-            'confidence': prediction_confidence,
-            'timestamp': datetime.now().isoformat()
-        }
+        try:
+            latest_data_row = df.iloc[-1]
+            if latest_data_row[self.features].isnull().any():
+                self.logger.warning(f"Latest data row contains NaN in features: {latest_data_row[self.features]}. Skipping prediction.")
+                return None
+            latest_data = latest_data_row[self.features].values.reshape(1, -1)
+            scaled_data = self.scaler.transform(latest_data)
+            prediction = self.model.predict(scaled_data)[0]
+            probability = self.model.predict_proba(scaled_data)[0]
+            prediction_confidence = probability[1] if prediction == 1 else probability[0]
+            self.logger.info(f"RAW AI prediction: {'UP' if prediction == 1 else 'DOWN'} with {prediction_confidence:.2f} confidence")
+            return {
+                'direction': 'up' if prediction == 1 else 'down',
+                'confidence': prediction_confidence,
+                'timestamp': datetime.now().isoformat()
+            }
+        except IndexError:
+            self.logger.error("IndexError: Could not access iloc[-1]. DataFrame might be smaller than expected.")
+            return None
+        except Exception as e:
+            self.logger.error(f"Error during prediction: {e}")
+            return None
 
     def get_wallet_balance(self):
         """Get available balance from wallet"""
         try:
             response = self.client.get_wallet_balance(accountType="UNIFIED", coin="USDT")
-            
             if response['retCode'] != 0:
                 self.logger.error(f"Error getting wallet balance: {response['retMsg']}")
                 return None
-            
-            balance = float(response['result']['list'][0]['coin'][0]['walletBalance'])
-            self.logger.debug(f"Current wallet balance: {balance} USDT")
-            return balance
-            
+            balance = None
+            if response['result'] and response['result']['list']:
+                unified_account = response['result']['list'][0]
+                if unified_account['coin']:
+                    for coin_info in unified_account['coin']:
+                        if coin_info['coin'] == 'USDT':
+                            balance = float(coin_info['walletBalance'])
+                            break
+            if balance is not None:
+                self.logger.debug(f"Current wallet balance: {balance} USDT")
+                return balance
+            else:
+                self.logger.error("Could not find USDT balance in the response.")
+                return None
         except Exception as e:
             self.logger.error(f"Error getting wallet balance: {str(e)}")
             return None
@@ -367,15 +266,16 @@ class TradingBot:
         """Get the current price of the trading symbol"""
         try:
             response = self.client.get_tickers(category=self.category, symbol=self.symbol)
-            
             if response['retCode'] != 0:
                 self.logger.error(f"Error getting ticker: {response['retMsg']}")
                 return None
-            
-            price = float(response['result']['list'][0]['lastPrice'])
-            self.logger.info(f"Current {self.symbol} price: {price}")
-            return price
-            
+            if response['result'] and response['result']['list']:
+                price = float(response['result']['list'][0]['lastPrice'])
+                self.logger.info(f"Current {self.symbol} price: {price}")
+                return price
+            else:
+                self.logger.error(f"Ticker data not found in response for {self.symbol}")
+                return None
         except Exception as e:
             self.logger.error(f"Error getting current price: {str(e)}")
             return None
@@ -387,37 +287,43 @@ class TradingBot:
                 category=self.category,
                 symbol=self.symbol
             )
-            
             if response['retCode'] != 0:
+                if "position not found" in response['retMsg']:
+                    self.logger.info("No open positions found.")
+                    self.current_position = None
+                    return None
                 self.logger.error(f"Error checking positions: {response['retMsg']}")
                 return None
-            
             positions = response['result']['list']
-            
-            if not positions or float(positions[0]['size']) == 0:
-                self.logger.info("No open positions")
+            if not positions or not positions[0] or float(positions[0]['size']) == 0:
+                self.logger.info("No open positions.")
                 self.current_position = None
                 return None
-            
+            pos_data = positions[0]
             position = {
-                'size': float(positions[0]['size']),
-                'side': positions[0]['side'],
-                'entry_price': float(positions[0]['avgPrice']),
-                'unrealized_pnl': float(positions[0]['unrealisedPnl'])
+                'size': float(pos_data.get('size', 0)),
+                'side': pos_data.get('side'),
+                'entry_price': float(pos_data.get('avgPrice', 0)),
+                'unrealized_pnl': float(pos_data.get('unrealisedPnl', 0)),
+                'mark_price': float(pos_data.get('markPrice', 0))
             }
-            
+            if not position['side'] or position['entry_price'] == 0:
+                self.logger.warning(f"Incomplete position data received: {pos_data}")
+                self.current_position = None
+                return None
             self.current_position = position
-            self.logger.info(f"Current position: {position['size']} {self.symbol} {position['side']} " +
-                           f"at {position['entry_price']}, PnL: {position['unrealized_pnl']}")
-            
+            self.logger.info(f"Current position: {position['size']} {self.symbol} {position['side']} at {position['entry_price']:.4f}, PnL: {position['unrealized_pnl']:.4f}")
             return position
-            
         except Exception as e:
             self.logger.error(f"Error checking positions: {str(e)}")
+            self.current_position = None
             return None
 
     def place_order(self, side, quantity, order_type="Market", price=None):
         """Place an order on Bybit"""
+        if quantity <= 0:
+            self.logger.warning(f"Attempted to place order with zero or negative quantity: {quantity}. Skipping.")
+            return None
         try:
             order_params = {
                 "category": self.category,
@@ -426,346 +332,287 @@ class TradingBot:
                 "orderType": order_type,
                 "qty": str(quantity)
             }
-            
-            if price and order_type == "Limit":
+            if order_type == "Limit":
+                if price is None:
+                    self.logger.error("Price must be provided for Limit orders.")
+                    return None
                 order_params["price"] = str(price)
-                order_params["timeInForce"] = "PostOnly"
-            else:
-                order_params["timeInForce"] = "GTC"
-            
+            self.logger.info(f"Placing order with params: {order_params}")
             response = self.client.place_order(**order_params)
-            
             if response['retCode'] != 0:
-                self.logger.error(f"Order error: {response['retMsg']}")
+                self.logger.error(f"Order placement error: {response['retMsg']} (Code: {response['retCode']})")
+                if 'result' in response and response['result']:
+                    self.logger.error(f"Order Response Result: {response['result']}")
                 return None
-            
-            order_id = response['result']['orderId']
-            self.logger.info(f"Order placed: {side} {quantity} {self.symbol} at {price if price else 'market price'}, ID: {order_id}")
-            
+            order_id = response['result'].get('orderId', 'N/A')
+            order_link_id = response['result'].get('orderLinkId', 'N/A')
+            self.logger.info(f"Order placed successfully: {side} {quantity} {self.symbol} {order_type} at {price if price else 'market price'}. ID: {order_id}, LinkID: {order_link_id}")
+            if (side == "Sell" and self.current_position and self.current_position['side'] == "Buy") or \
+               (side == "Buy" and self.current_position and self.current_position['side'] == "Sell"):
+                self.stop_price = None
+                self.logger.info("Reset TSL price after closing position.")
             return order_id
-            
         except Exception as e:
-            self.logger.error(f"Error placing order: {str(e)}")
+            self.logger.error(f"Exception during order placement: {str(e)}")
             return None
-
-    def calculate_trade_quantity(self, price, usd_amount):
-        """Calculate the quantity to trade based on USD amount"""
-        if not price:
-            return None
-        
-        # Calculate quantity and round to the nearest quantity step
-        quantity = round(usd_amount / price / self.quantity_step) * self.quantity_step
-        return quantity
 
     def calculate_risk_based_quantity(self, current_price):
-        # 1) Get wallet balance
-        balance = self.get_wallet_balance()
-        if balance is None:
+        """Calculate quantity based on risk percentage and fixed stop loss distance"""
+        if current_price is None or current_price <= 0:
+            self.logger.error("Invalid current_price for quantity calculation.")
             return None
-        
-        # 2) Risk capital = balance * self.risk_per_trade
+        balance = self.get_wallet_balance()
+        if balance is None or balance <= 0:
+            self.logger.error("Invalid balance for quantity calculation.")
+            return None
         risk_capital = balance * self.risk_per_trade
-        
-        # 3) Decide a stop-loss distance, e.g. use ATR or a fixed fraction:
-        df = self.fetch_market_data(interval=self.trading_interval, limit=30)
-        df = self.calculate_indicators(df)
-        # if df is None or 'atr' not in df.columns:
-        #     self.logger.warning('No ATR available, fallback to fixed stop distance.')
-        #     stop_distance = current_price * 0.01  # e.g. 1% of price
-        # else:
-        #     # Use last ATR value
-        #     stop_distance = df.iloc[-1]['atr']
-        #     self.logger.debug(f"Using ATR-based stop distance: {stop_distance}")
-        stop_distance = current_price * 0.01  # e.g. 1% of price
-        
-        # 4) Position size = risk_capital / (stop_distance)
+        if risk_capital <= 0:
+            self.logger.warning(f"Calculated risk capital is zero or negative ({risk_capital:.4f}). Cannot calculate quantity.")
+            return None
+        self.logger.debug(f"Risk capital: {risk_capital:.4f} USDT")
+        stop_distance_pct = self.stop_loss_threshold
+        stop_distance = current_price * (stop_distance_pct / 100.0)
+        if stop_distance <= 0:
+            self.logger.error(f"Calculated stop distance is zero or negative ({stop_distance:.4f}) based on SL threshold {stop_distance_pct}%. Cannot calculate quantity.")
+            return None
+        self.logger.debug(f"Stop distance (price units): {stop_distance:.4f}")
         quantity = risk_capital / stop_distance
+        self.logger.debug(f"Raw quantity calculated: {quantity:.8f}")
+        if self.quantity_step <= 0:
+            self.logger.error("Invalid quantity_step (must be > 0).")
+            return None
+        quantity_adjusted = (quantity // self.quantity_step) * self.quantity_step
+        self.logger.info(f"Calculated risk-based quantity: {quantity_adjusted:.8f} {self.symbol[:-4]} (Step: {self.quantity_step})")
+        if quantity_adjusted <= 0:
+            self.logger.warning(f"Adjusted quantity is zero or less ({quantity_adjusted:.8f}) after applying step {self.quantity_step}. Cannot place trade.")
+            return None
+        return quantity_adjusted
 
-        # Round to nearest quantity step
-        quantity = round(quantity / self.quantity_step) * self.quantity_step
-        return quantity
-
-    def should_open_long(self, df, prediction_confidence):
-        """
-        Decide if we should open a LONG position based on:
-        - AI confidence
-        - MACD > MACD signal
-        - RSI above 50
-        """
-        # Basic checks
-        if prediction_confidence < 0.70:
-            return False  # not confident enough
-        
-        # Confluence checks
-        latest_row = df.iloc[-1]
-        if latest_row['macd'] <= latest_row['macd_signal']:
-            return False
-        if latest_row['rsi'] <= 50:
-            return False
-        
-        return True
-
-    def should_open_short(self, df, prediction_confidence):
-        """
-        Decide if we should open a SHORT position based on:
-        - AI confidence
-        - MACD < MACD signal
-        - RSI below 50
-        """
-        if prediction_confidence < 0.70:
-            return False
-        
-        latest_row = df.iloc[-1]
-        if latest_row['macd'] >= latest_row['macd_signal']:
-            return False
-        if latest_row['rsi'] >= 50:
-            return False
-        
-        return True
-
-    def place_atr_based_stop(self, side, entry_price, df):
-        if df is None or 'atr' not in df.columns:
-            return None, None
-        
-        last_atr = df.iloc[-1]['atr']
-        if side == 'Buy':
-            stop_loss = entry_price - 1.5 * last_atr
-            take_profit = entry_price + 2.0 * last_atr
-        else:  # side == 'Sell'
-            stop_loss = entry_price + 1.5 * last_atr
-            take_profit = entry_price - 2.0 * last_atr
-        
-        return stop_loss, take_profit
-
-
-    # NEW: Helper method to close position and retrain model
-    def close_position(self, side, price_change_pct, df, confidence, direction, position):
-        if side == "Buy":
-            self.place_order("Sell", position['size'])
-            y_new = np.array([1 if price_change_pct >= self.profit_threshold else 0], dtype=int)
-        else:  # side == "Sell"
-            self.place_order("Buy", position['size'])
-            y_new = np.array([0 if -price_change_pct >= self.profit_threshold else 1], dtype=int)
-        X_new = df.iloc[-1][self.features].values.reshape(1, -1)
-        self.logger.info(f"Closing {side} position. Price change: {price_change_pct:.2f}%, AI: {direction} ({confidence:.2f})")
-        self.logger.info(f"Incremental retrain with new data. Input shape: {X_new}, target shape: {y_new}")
-        self.incremental_retrain(X_new, y_new)
-        return True
-
-    # NEW: Helper method to update trailing stop loss (TSL) value
-    def update_trailing_stop_value(self, side, current_price):
+    def update_trailing_stop_value(self, side, current_price, entry_price):
         """
         Update trailing stop loss based on the current price.
-        For Buy: new TSL = current_price * (1 - trailing_stop_loss/100)
-        For Sell: new TSL = current_price * (1 + trailing_stop_loss/100)
-        Updates if TSL is not set or if the new value improves the stop level.
+        Only updates if TSL is not set or if the new value improves the stop level.
+        Requires the position to be profitable relative to entry price.
         """
+        if current_price <= 0:
+            return False
+
+        is_profitable = (side == "Buy" and current_price > entry_price) or \
+                        (side == "Sell" and current_price < entry_price)
+        if not is_profitable:
+            return False
+
         if side == "Buy":
-            new_tsl = current_price * (1 - self.trailing_stop_loss / 100)
-            if self.stop_price and new_tsl > self.stop_price:
-                self.stop_price = new_tsl
-                self.logger.info(f"Updated TSL to: {self.stop_price}")
-                return True
-            self.logger.info(f"Keeping TSL: {self.stop_price}")
-        else:
-            new_tsl = current_price * (1 + self.trailing_stop_loss / 100)
-            if self.stop_price and new_tsl < self.stop_price:
-                self.stop_price = new_tsl
-                self.logger.info(f"Updated TSL to: {self.stop_price}")
-                return True
-            self.logger.info(f"Keeping TSL: {self.stop_price}")
+            new_tsl = current_price * (1 - self.trailing_stop_loss / 100.0)
+            if self.stop_price is None or new_tsl > self.stop_price:
+                if new_tsl > entry_price:
+                    old_tsl = self.stop_price
+                    self.stop_price = new_tsl
+                    self.logger.info(f"Updated TSL for LONG from {old_tsl} to: {self.stop_price:.4f} (Current: {current_price:.4f})")
+                    return True
+                else:
+                    return False
+        elif side == "Sell":
+            new_tsl = current_price * (1 + self.trailing_stop_loss / 100.0)
+            if self.stop_price is None or new_tsl < self.stop_price:
+                if new_tsl < entry_price:
+                    old_tsl = self.stop_price
+                    self.stop_price = new_tsl
+                    self.logger.info(f"Updated TSL for SHORT from {old_tsl} to: {self.stop_price:.4f} (Current: {current_price:.4f})")
+                    return True
+                else:
+                    return False
         return False
 
     def execute_trade_strategy(self):
+        """Execute trading logic based on RAW data AI predictions"""
+        self.logger.info("--- Executing Trade Strategy Cycle ---")
         current_price = self.get_current_price()
-        if not current_price:
+        if current_price is None:
+            self.logger.error("Could not get current price. Skipping cycle.")
             return False
-        
-        position = self.check_open_positions()
-        # [IMPROVEMENT] Fetch fresh data for confluence
-        df = self.fetch_market_data(interval=self.trading_interval, limit=self.lookback_period)
-        df = self.calculate_indicators(df)
-        if df is None or len(df) < self.prediction_horizon:
-            self.logger.warning(f"Not enough data to make a confluence-based decision. Data length: {len(df)}")
+
+        df = self.fetch_market_data(interval=self.trading_interval, limit=self.lookback_period + 5)
+        if df is None or df.empty:
+            self.logger.warning("Could not fetch sufficient recent data. Skipping cycle.")
             return False
-        
-        # [IMPROVEMENT] AI Prediction
+
         prediction = self.predict_price_direction()
-        if not prediction:
+        if prediction is None:
+            self.logger.warning("Could not get AI prediction. Skipping cycle.")
             return False
-        
-        direction = prediction['direction']  # 'up' or 'down'
+
+        direction = prediction['direction']
         confidence = prediction['confidence']
-        
+
+        position = self.check_open_positions()
+
         if position:
             self.skipped_trades = 0
             entry_price = position['entry_price']
-            side = position['side']  # 'Buy' or 'Sell'
-            unrealized_pnl = position['unrealized_pnl']
-            price_change_pct = ((current_price - entry_price) / entry_price) * 100
-            self.logger.info(f"Current position: {side} {position['size']} at {entry_price}, PnL: {unrealized_pnl:.2f} USDT")
-            self.logger.debug(f"Current price change: {price_change_pct:.2f}%")
-            
-            if unrealized_pnl > (current_price * position['size'] * 0.055 / 100 * 1.05):
-                if self.stop_price is None:
-                    # Initialize TSL at the moment PnL becomes positive
-                    self.stop_price = (current_price * (1 - self.trailing_stop_loss / 100)
-                                       if side == "Buy"
-                                       else current_price * (1 + self.trailing_stop_loss / 100))
-                    self.logger.info(f"Initialized TSL at: {self.stop_price}")
-            else:
+            side = position['side']
+            position_size = position['size']
+            price_change_pct = 0 if entry_price == 0 else ((current_price - entry_price) / entry_price) * 100
+            self.logger.info(f"Managing {side} position. Entry: {entry_price:.4f}, Current: {current_price:.4f}, Change: {price_change_pct:.2f}%, TSL: {self.stop_price}")
+            try:
+                latest_features_raw = df.iloc[-1][self.features].values
+            except (IndexError, KeyError) as e:
+                self.logger.error(f"Failed to get latest raw features for retraining: {e}. Cannot close/retrain.")
+                return False
+
+            close_position_flag = False
+            retrain_label = None
+
+            if self.stop_price is not None:
+                if side == 'Buy' and current_price <= self.stop_price:
+                    self.logger.info(f"Trailing Stop Loss hit for LONG at {self.stop_price:.4f}. Closing position.")
+                    close_position_flag = True
+                    retrain_label = 1
+                elif side == 'Sell' and current_price >= self.stop_price:
+                    self.logger.info(f"Trailing Stop Loss hit for SHORT at {self.stop_price:.4f}. Closing position.")
+                    close_position_flag = True
+                    retrain_label = 0
+
+            if not close_position_flag:
+                if side == 'Buy' and price_change_pct >= self.profit_threshold:
+                    self.logger.info(f"Take Profit threshold ({self.profit_threshold:.2f}%) hit for LONG. Closing position.")
+                    close_position_flag = True
+                    retrain_label = 1
+                elif side == 'Sell' and price_change_pct <= -self.profit_threshold:
+                    self.logger.info(f"Take Profit threshold ({self.profit_threshold:.2f}%) hit for SHORT. Closing position.")
+                    close_position_flag = True
+                    retrain_label = 0
+
+            if not close_position_flag and self.stop_price is None:
+                if side == 'Buy' and price_change_pct <= -self.stop_loss_threshold:
+                    self.logger.info(f"Stop Loss threshold ({self.stop_loss_threshold:.2f}%) hit for LONG. Closing position.")
+                    close_position_flag = True
+                    retrain_label = 0
+                elif side == 'Sell' and price_change_pct >= self.stop_loss_threshold:
+                    self.logger.info(f"Stop Loss threshold ({self.stop_loss_threshold:.2f}%) hit for SHORT. Closing position.")
+                    close_position_flag = True
+                    retrain_label = 1
+
+            if close_position_flag:
+                close_side = "Sell" if side == "Buy" else "Buy"
+                order_id = self.place_order(close_side, position_size)
+                if order_id and retrain_label is not None:
+                    self.logger.info(f"Position closed. Retraining model with label: {retrain_label}")
+                    self.incremental_retrain(latest_features_raw, [retrain_label])
+                else:
+                    self.logger.error("Failed to place closing order or retrain label missing. Manual check needed.")
+                self.current_position = None
                 self.stop_price = None
-                self.logger.info("Reset TSL due to negative PnL")
-            
-            if side == 'Buy':
-                if self.stop_price and current_price <= self.stop_price:
-                    self.logger.info(f"TSL hit at {self.stop_price}. Closing LONG position.")
-                    self.place_order("Sell", position['size'])
-                    # Changed to one-dimensional array
-                    y_new = np.array([1], dtype=int)
-                    X_new = df.iloc[-1][self.features].values.reshape(1, -1)
-                    self.logger.info(f"Prediction was successful. PnL: {unrealized_pnl:.2f} USDT")
-                    self.logger.info(f"Incremental retrain with new data. Input shape: {X_new}, target shape: {y_new}")
-                    self.incremental_retrain(X_new, y_new)
-                    return True
-                elif price_change_pct >= self.profit_threshold:
-                    self.logger.info(f"Take profit hit {self.stop_price}. Closing LONG position.")
-                    self.place_order("Sell", position['size'])
-                    # Changed to one-dimensional array
-                    y_new = np.array([1], dtype=int)
-                    X_new = df.iloc[-1][self.features].values.reshape(1, -1)
-                    self.logger.info(f"Prediction was successful. PnL: {unrealized_pnl:.2f} USDT")
-                    self.logger.info(f"Incremental retrain with new data. Input shape: {X_new}, target shape: {y_new}")
-                    self.incremental_retrain(X_new, y_new)
-                    return True
-                elif not self.stop_price and price_change_pct <= -self.stop_loss_threshold:
-                    self.logger.info(f"Stop loss hit at {current_price}. Closing LONG position.")
-                    self.place_order("Sell", position['size'])
-                    # Changed to one-dimensional array
-                    y_new = np.array([0], dtype=int)
-                    X_new = df.iloc[-1][self.features].values.reshape(1, -1)
-                    self.logger.warning(f"Prediction was wrong. PnL: {unrealized_pnl:.2f} USDT")
-                    self.logger.info(f"Incremental retrain with new data. Input shape: {X_new}, target shape: {y_new}")
-                    self.incremental_retrain(X_new, y_new)
-                    return True
-                else:
-                    self.update_trailing_stop_value(side, current_price)
+                return True
             else:
-                if self.stop_price and current_price >= self.stop_price:
-                    self.logger.info(f"TSL hit at {self.stop_price}. Closing SHORT position.")
-                    self.place_order("Buy", position['size'])
-                    # Changed to one-dimensional array
-                    y_new = np.array([0], dtype=int)
-                    X_new = df.iloc[-1][self.features].values.reshape(1, -1)
-                    self.logger.info(f"Prediction was successful. PnL: {unrealized_pnl:.2f} USDT")
-                    self.logger.info(f"Incremental retrain with new data. Input shape: {X_new}, target shape: {y_new}")
-                    self.incremental_retrain(X_new, y_new)
-                    return True
-                elif price_change_pct <= -self.profit_threshold:
-                    self.logger.info(f"Take profit hit {self.stop_price}. Closing SHORT position.")
-                    self.place_order("Buy", position['size'])
-                    # Changed to one-dimensional array
-                    y_new = np.array([0], dtype=int)
-                    X_new = df.iloc[-1][self.features].values.reshape(1, -1)
-                    self.logger.info(f"Prediction was successful. PnL: {unrealized_pnl:.2f} USDT")
-                    self.logger.info(f"Incremental retrain with new data. Input shape: {X_new}, target shape: {y_new}")
-                    self.incremental_retrain(X_new, y_new)
-                    return True
-                elif not self.stop_price and price_change_pct >= self.profit_threshold:
-                    self.logger.info(f"Stop loss hit at {current_price}. Closing SHORT position.")
-                    self.place_order("Buy", position['size'])
-                    # Changed to one-dimensional array
-                    y_new = np.array([1], dtype=int)
-                    X_new = df.iloc[-1][self.features].values.reshape(1, -1)
-                    self.logger.warning(f"Prediction was wrong. PnL: {unrealized_pnl:.2f} USDT")
-                    self.logger.info(f"Incremental retrain with new data. Input shape: {X_new}, target shape: {y_new}")
-                    self.incremental_retrain(X_new, y_new)
-                    return True
-                else:
-                    self.update_trailing_stop_value(side, current_price)
+                self.update_trailing_stop_value(side, current_price, entry_price)
         else:
-            # No open positions
-            # [IMPROVEMENT] Evaluate confluence
-            if direction == 'up':
-                if confidence > 0.75: #self.should_open_long(df, confidence):
-                    quantity = self.calculate_risk_based_quantity(current_price)
-                    if quantity and quantity > 0:
-                        self.logger.info(f"Opening LONG. Confidence: {confidence:.2f}")
+            self.logger.info(f"No open position. AI Prediction: {direction.upper()} (Confidence: {confidence:.2f})")
+            CONFIDENCE_THRESHOLD = 0.75
+            open_trade_flag = False
+            trade_side = None
+            if direction == 'up' and confidence >= CONFIDENCE_THRESHOLD:
+                self.logger.info(f"AI suggests LONG with sufficient confidence ({confidence:.2f}).")
+                trade_side = "Buy"
+                open_trade_flag = True
+            elif direction == 'down' and confidence >= CONFIDENCE_THRESHOLD:
+                self.logger.info(f"AI suggests SHORT with sufficient confidence ({confidence:.2f}).")
+                trade_side = "Sell"
+                open_trade_flag = True
+
+            if open_trade_flag:
+                quantity = self.calculate_risk_based_quantity(current_price)
+                if quantity and quantity > 0:
+                    self.logger.info(f"Calculated quantity: {quantity}. Placing {trade_side} order.")
+                    order_id = self.place_order(trade_side, quantity)
+                    if order_id:
                         self.skipped_trades = 0
-                        return self.place_order("Buy", quantity)
-            elif direction == 'down':
-                if confidence > 0.75: #self.should_open_short(df, confidence):
-                    quantity = self.calculate_risk_based_quantity(current_price)
-                    if quantity and quantity > 0:
-                        self.logger.info(f"Opening SHORT. Confidence: {confidence:.2f}")
-                        self.skipped_trades = 0
-                        return self.place_order("Sell", quantity)
-        
-        self.logger.info("No trade signals at this time.")
-
-        self.skipped_trades += 1
-        # If price moves significantly while bot stays inactive, penalize it
-        if self.skipped_trades >= self.max_skipped_trades:
-            last_movement = abs(df.iloc[-1]['price_change_15m'])  # Check 15m price change
-            punishment_threshold = self.profit_threshold  # Adjusted from 1.5% to 0.3% (can be tweaked)
-
-            self.logger.debug(f"Last price movement: {last_movement:.2f}%")
-
-            if last_movement > punishment_threshold:
-                self.logger.warning(f"Missed a {last_movement:.2f}% price move! Penalizing model for inaction.")
-                
-                # The bot was inactive, so we assume it should have traded
-                X_penalty = df.iloc[-1][self.features].values.reshape(1, -1)
-
-                # If price moved UP, encourage an "UP" prediction next time
-                y_penalty = np.array([1]) if df.iloc[-1]['price_change_15m'] > 0 else np.array([0])
-
-                self.incremental_retrain(X_penalty, y_penalty)
+                        self.stop_price = None
+                        return True
+                    else:
+                        self.logger.error("Failed to place opening order.")
+                else:
+                    self.logger.warning("Calculated quantity was zero or invalid. Cannot open trade.")
             else:
-                self.logger.debug("No significant price movement while bot was inactive.")
+                self.logger.info("AI prediction confidence below threshold or no signal. No trade.")
+                self.skipped_trades += 1
+                self.logger.info(f"Skipped trades count: {self.skipped_trades}")
 
+            if self.skipped_trades >= self.max_skipped_trades:
+                self.logger.warning(f"Reached max skipped trades ({self.max_skipped_trades}). Checking for penalty.")
+                try:
+                    start_index = max(0, len(df) - 1 - self.prediction_horizon)
+                    price_then = df['close'].iloc[start_index]
+                    price_now = df['close'].iloc[-1]
+                    if price_then > 0:
+                        actual_change_pct = ((price_now - price_then) / price_then) * 100
+                        self.logger.info(f"Actual price change over ~{self.prediction_horizon} steps: {actual_change_pct:.2f}%")
+                        punishment_threshold_pct = self.profit_threshold
+                        if abs(actual_change_pct) >= punishment_threshold_pct:
+                            self.logger.warning(f"Significant price move ({actual_change_pct:.2f}%) missed! Penalizing model for inaction.")
+                            penalty_label = 1 if actual_change_pct > 0 else 0
+                            latest_features_raw = df.iloc[-1][self.features].values
+                            self.logger.info(f"Retraining inactive model with label: {penalty_label}")
+                            self.incremental_retrain(latest_features_raw, [penalty_label])
+                            self.skipped_trades = 0
+                        else:
+                            self.logger.info("No significant price movement during inactivity. No penalty.")
+                    else:
+                        self.logger.warning("Could not calculate actual price change due to zero start price.")
+                except IndexError:
+                    self.logger.warning("Not enough data points in df to calculate actual change for penalty.")
+                except Exception as e:
+                    self.logger.error(f"Error during penalty calculation: {e}")
         return True
 
     def run(self):
         """Run the trading bot in a loop"""
-        self.logger.info(f"Starting trading bot for {self.symbol}")
-        
+        self.logger.info(f"Starting RAW data trading bot for {self.symbol} on {self.trading_interval} min interval.")
+        self.check_open_positions()
+        self.get_wallet_balance()
         while True:
+            start_time = time.time()
             try:
-                self.execute_trade_strategy()
-                
-                # Sleep until next iteration
-                self.logger.info(f"Sleeping for {self.interval_seconds} seconds")
-                time.sleep(self.interval_seconds)
-                
+                success = self.execute_trade_strategy()
+                if not success:
+                    self.logger.warning("Trade strategy execution reported an issue. Continuing loop.")
             except KeyboardInterrupt:
-                self.logger.info("Trading bot stopped by user")
+                self.logger.info("Trading bot stopped by user (KeyboardInterrupt).")
                 break
-                
             except Exception as e:
-                self.logger.error(f"Error in main loop: {str(e)}")
-                time.sleep(60)  # Wait a minute before retrying
+                self.logger.error(f"!!! Critical Error in main loop: {str(e)}", exc_info=True)
+            end_time = time.time()
+            elapsed = end_time - start_time
+            sleep_time = self.interval_seconds - elapsed
+            if sleep_time < 0:
+                self.logger.warning(f"Strategy execution ({elapsed:.2f}s) took longer than interval ({self.interval_seconds}s). Running next cycle immediately.")
+                sleep_time = 0
+            self.logger.info(f"--- Cycle End --- Sleeping for {sleep_time:.2f} seconds ---")
+            if sleep_time > 0:
+                time.sleep(sleep_time)
 
 if __name__ == "__main__":
+    import os
+    API_KEY = os.environ.get('BYBIT_API_KEY', 'your_api_key')
+    API_SECRET = os.environ.get('BYBIT_API_SECRET', 'your_api_secret')
+    if API_KEY == 'your_api_key' or API_SECRET == 'your_api_secret':
+        print("WARNING: Using default API keys. Please set BYBIT_API_KEY and BYBIT_API_SECRET environment variables.")
     bot = TradingBot(
-        bybit_api_key='your_api_key',
-        bybit_api_secret='your_api_secret',
+        bybit_api_key=API_KEY,
+        bybit_api_secret=API_SECRET,
         bybit_url='https://api.bybit.com',
         symbol='BTCUSDT',
         category='linear',
-        order_value=100,
-        upward_trend_threshold=0.5,
-        dip_threshold=0.5,
-        profit_threshold=1.0,
-        stop_loss_threshold=0.5,
-        initial_price=50000,
-        lookback_period=14,
-        prediction_horizon=1,
-        features=['rsi', 'macd', 'macd_signal', 'bollinger_upper', 'bollinger_lower', 'price_change_1h', 'price_change_4h', 'price_change_24h', 'volume_change'],
-        interval_seconds=300,
-        training_data_limit=2000,
-        trading_interval='60',
-        quantity_step=0.001,  # Add quantity_step parameter
-        risk_per_trade=0.01  # Add risk_per_trade parameter
+        profit_threshold=0.8,       # Take profit %
+        stop_loss_threshold=0.4,    # Stop loss %
+        trailing_stop_loss=0.3,     # Trailing stop loss % activation/distance
+        lookback_period=30,         # How much data to fetch for context (e.g., needed for 30 steps)
+        prediction_horizon=1,       # Predict 1 interval step ahead
+        features=['open', 'high', 'low', 'close', 'volume'],
+        interval_seconds=60,        # Check every 60 seconds
+        training_data_limit=2000,   # For initial training
+        trading_interval='1',       # Use 1-minute klines
+        quantity_step=0.001,        # Min BTC quantity step for BTCUSDT linear
+        risk_per_trade=0.01         # Risk 1% of balance per trade
     )
     bot.run()
