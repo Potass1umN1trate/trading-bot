@@ -8,6 +8,8 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.neural_network import MLPClassifier
 import joblib
 import os.path
+from collections import deque
+import numpy as np
 
 class TradingBot:
     def __init__(
@@ -27,7 +29,8 @@ class TradingBot:
         trading_interval,
         quantity_step,
         risk_per_trade=0.01,
-        trailing_stop_loss=0.075
+        trailing_stop_loss=0.075,
+        retrain_buffer_size=100, # New parameter for buffer size
     ):
         # Initialize logger
         self.setup_logger()
@@ -68,6 +71,12 @@ class TradingBot:
         self.trading_interval = trading_interval
         self.quantity_step = quantity_step
         self.risk_per_trade = risk_per_trade
+
+        # --- Retraining Buffer ---
+        self.buffer_size = retrain_buffer_size
+        self.retrain_buffer = deque(maxlen=self.buffer_size)
+        self.logger.info(f"Initialized retraining buffer with max size: {self.buffer_size}")
+        # ---
 
         # Initialize or load AI model
         self.initialize_model()
@@ -178,29 +187,50 @@ class TradingBot:
         self.logger.info(f"RAW Model saved to {model_path}, Scaler saved to {scaler_path}")
         return True
 
-    def incremental_retrain(self, X_new, y_new):
-        """Incrementally retrain the model with new RAW data"""
+    def incremental_retrain(self, X_batch, y_batch):
+        """
+        Incrementally retrain the model with a batch of new RAW data.
+        Assumes the caller ensures y_batch contains both classes 0 and 1.
+        """
         model_path = 'trading_model_raw.joblib'
+
         if self.model is None or self.scaler is None:
             self.logger.error("Model or scaler not initialized for incremental retrain.")
-            return
-        y_new = np.asarray(y_new)
-        if X_new.ndim == 1:
-            X_new = X_new.reshape(1, -1)
-        unique_classes = np.unique(y_new)
-        classes_to_fit = np.array([0, 1])
-        if len(unique_classes) == 0:
-            self.logger.warning("incremental_retrain called with empty y_new. Skipping.")
-            return
-        elif len(unique_classes) == 1:
-            self.logger.warning(f"incremental_retrain called with only one class ({unique_classes[0]}) in y_new. Still fitting with classes [0, 1].")
+            return False # Indicate failure
+
+        # Ensure inputs are numpy arrays
+        X_batch = np.asarray(X_batch)
+        y_batch = np.asarray(y_batch)
+
+        # Basic validation
+        if X_batch.ndim != 2 or len(X_batch) == 0 or len(X_batch) != len(y_batch):
+            self.logger.error(f"Invalid input shapes for incremental retrain: X={X_batch.shape}, y={y_batch.shape}")
+            return False
+
+        self.logger.info(f"Starting incremental retrain with batch size: {len(y_batch)}")
+        self.logger.debug(f"Unique labels in batch: {np.unique(y_batch)}")
+
         try:
-            X_new_scaled = self.scaler.transform(X_new)
-            self.model.partial_fit(X_new_scaled, y_new, classes=classes_to_fit)
+            # Scale the batch of RAW data with the existing scaler
+            X_batch_scaled = self.scaler.transform(X_batch)
+
+            # Call partial_fit, explicitly providing all possible classes
+            self.model.partial_fit(X_batch_scaled, y_batch, classes=np.array([0, 1]))
+
+            # Save the updated model
             joblib.dump(self.model, model_path)
-            self.logger.info(f"Incremental partial_fit completed. Model saved to {model_path}")
+            self.logger.info(f"Incremental partial_fit completed successfully. Model saved to {model_path}")
+            return True # Indicate success
+
+        except ValueError as ve:
+            # Log specific ValueErrors that might still occur
+            self.logger.error(f"ValueError during incremental retrain: {ve}")
+            self.logger.error(f"Data shapes: X_batch_scaled={X_batch_scaled.shape if 'X_batch_scaled' in locals() else 'N/A'}, y_batch={y_batch.shape}")
+            self.logger.error(f"Unique y values in batch provided to fit: {np.unique(y_batch)}")
+            return False
         except Exception as e:
-            self.logger.error(f"Error during incremental retrain: {e}")
+            self.logger.error(f"Unhandled exception during incremental retrain: {e}", exc_info=True)
+            return False
 
     def predict_price_direction(self):
         """Use the trained model to predict price direction using RAW data"""
@@ -456,9 +486,12 @@ class TradingBot:
             self.logger.info(f"Managing {side} position. Entry: {entry_price:.4f}, Current: {current_price:.4f}, Change: {price_change_pct:.2f}%, TSL: {self.stop_price}")
             try:
                 latest_features_raw = df.iloc[-1][self.features].values
+                if latest_features_raw.ndim > 1:
+                    latest_features_raw = latest_features_raw.flatten()
+
             except (IndexError, KeyError) as e:
                 self.logger.error(f"Failed to get latest raw features for retraining: {e}. Cannot close/retrain.")
-                return False
+                least_features_raw = None
 
             close_position_flag = False
             retrain_label = None
@@ -494,18 +527,22 @@ class TradingBot:
                     retrain_label = 1
 
             if close_position_flag:
-                close_side = "Sell" if side == "Buy" else "Buy"
-                order_id = self.place_order(close_side, position_size)
-                if order_id and retrain_label is not None:
-                    self.logger.info(f"Position closed. Retraining model with label: {retrain_label}")
-                    self.incremental_retrain(latest_features_raw, [retrain_label])
-                else:
-                    self.logger.error("Failed to place closing order or retrain label missing. Manual check needed.")
-                self.current_position = None
-                self.stop_price = None
-                return True
-            else:
-                self.update_trailing_stop_value(side, current_price, entry_price)
+                 close_side = "Sell" if side == "Buy" else "Buy"
+                 order_id = self.place_order(close_side, position_size)
+                 if order_id:
+                     # --- Add to buffer instead of calling retrain directly ---
+                     if retrain_label is not None and latest_features_raw is not None:
+                         self.retrain_buffer.append((latest_features_raw, retrain_label))
+                         self.logger.info(f"Added sample (label {retrain_label}) to retrain buffer. Buffer size: {len(self.retrain_buffer)}")
+                     elif latest_features_raw is None:
+                          self.logger.warning("Could not add sample to buffer: features unavailable.")
+                     # --------------------------------------------------------
+                 else:
+                      self.logger.error("Failed to place closing order. Manual check needed.")
+                 self.current_position = None # Ensure position state is updated
+                 self.stop_price = None # Reset TSL after closing
+                 self._check_and_trigger_retrain() # Check buffer after adding sample
+                 return True # End cycle after closing position
         else:
             self.logger.info(f"No open position. AI Prediction: {direction.upper()} (Confidence: {confidence:.2f})")
             CONFIDENCE_THRESHOLD = 0.75
@@ -538,32 +575,83 @@ class TradingBot:
                 self.skipped_trades += 1
                 self.logger.info(f"Skipped trades count: {self.skipped_trades}")
 
-            if self.skipped_trades >= self.max_skipped_trades:
-                self.logger.warning(f"Reached max skipped trades ({self.max_skipped_trades}). Checking for penalty.")
-                try:
-                    start_index = max(0, len(df) - 1 - self.prediction_horizon)
-                    price_then = df['close'].iloc[start_index]
-                    price_now = df['close'].iloc[-1]
-                    if price_then > 0:
-                        actual_change_pct = ((price_now - price_then) / price_then) * 100
-                        self.logger.info(f"Actual price change over ~{self.prediction_horizon} steps: {actual_change_pct:.2f}%")
-                        punishment_threshold_pct = self.profit_threshold
-                        if abs(actual_change_pct) >= punishment_threshold_pct:
-                            self.logger.warning(f"Significant price move ({actual_change_pct:.2f}%) missed! Penalizing model for inaction.")
-                            penalty_label = 1 if actual_change_pct > 0 else 0
-                            latest_features_raw = df.iloc[-1][self.features].values
-                            self.logger.info(f"Retraining inactive model with label: {penalty_label}")
-                            self.incremental_retrain(latest_features_raw, [penalty_label])
-                            self.skipped_trades = 0
+                if self.skipped_trades >= self.max_skipped_trades:
+                    self.logger.warning(f"Reached max skipped trades ({self.max_skipped_trades}). Checking for penalty.")
+                    try:
+                        start_index = max(0, len(df) - 1 - self.prediction_horizon)
+                        price_then = df['close'].iloc[start_index]
+                        price_now = df['close'].iloc[-1]
+                        if price_then > 0:
+                            actual_change_pct = ((price_now - price_then) / price_then) * 100
+                            self.logger.info(f"Actual price change over ~{self.prediction_horizon} steps: {actual_change_pct:.2f}%")
+                            punishment_threshold_pct = self.profit_threshold
+                            if abs(actual_change_pct) >= punishment_threshold_pct:
+                                self.logger.warning(f"Significant price move ({actual_change_pct:.2f}%) missed! Penalizing model for inaction.")
+                                penalty_label = 1 if actual_change_pct > 0 else 0
+                                try:
+                                    latest_features_raw = df.iloc[-1][self.features].values
+                                    if latest_features_raw.ndim > 1:
+                                        latest_features_raw = latest_features_raw.flatten()
+                                    # --- Add penalty sample to buffer ---
+                                    self.retrain_buffer.append((latest_features_raw, penalty_label))
+                                    self.logger.info(f"Added penalty sample (label {penalty_label}) to retrain buffer. Buffer size: {len(self.retrain_buffer)}")
+                                    # ------------------------------------
+                                    self.skipped_trades = 0 # Reset counter after penalty
+                                except (IndexError, KeyError) as e:
+                                    self.logger.error(f"Failed to get latest raw features for penalty buffer sample: {e}")
+                                except Exception as e:
+                                    self.logger.error(f"Error during penalty handling: {e}")
+                            else:
+                                self.logger.info("No significant price movement during inactivity. No penalty.")
                         else:
-                            self.logger.info("No significant price movement during inactivity. No penalty.")
-                    else:
-                        self.logger.warning("Could not calculate actual price change due to zero start price.")
-                except IndexError:
-                    self.logger.warning("Not enough data points in df to calculate actual change for penalty.")
-                except Exception as e:
-                    self.logger.error(f"Error during penalty calculation: {e}")
+                            self.logger.warning("Could not calculate actual price change due to zero start price.")
+                    except IndexError:
+                        self.logger.warning("Not enough data points in df to calculate actual change for penalty.")
+                    except Exception as e:
+                        self.logger.error(f"Error during penalty calculation: {e}")
+
+        self._check_and_trigger_retrain() # Check buffer after processing
+        self.logger.info("Trade strategy cycle completed.")
         return True
+
+    def _check_and_trigger_retrain(self):
+        """
+        Checks the retraining buffer and triggers incremental retraining
+        if the buffer contains samples of both classes (0 and 1) and
+        meets a minimum size requirement.
+        """
+        MIN_BUFFER_FOR_RETRAIN = max(10, self.buffer_size // 10) # Require at least 10 samples or 10% of buffer size
+
+        self.logger.debug(f"Checking retrain buffer (Current size: {len(self.retrain_buffer)}).")
+
+        if len(self.retrain_buffer) < MIN_BUFFER_FOR_RETRAIN:
+            self.logger.debug(f"Buffer size ({len(self.retrain_buffer)}) is less than minimum required ({MIN_BUFFER_FOR_RETRAIN}). Not retraining.")
+            return
+
+        labels_in_buffer = [item[1] for item in self.retrain_buffer]
+        unique_labels = np.unique(labels_in_buffer)
+
+        if len(unique_labels) == 2: # Check if both 0 and 1 are present
+            self.logger.info(f"Retrain buffer contains both classes (0 and 1) and meets size requirement ({len(self.retrain_buffer)} >= {MIN_BUFFER_FOR_RETRAIN}). Triggering retrain.")
+
+            # Prepare data batches
+            X_batch = np.array([item[0] for item in self.retrain_buffer])
+            y_batch = np.array(labels_in_buffer)
+
+            # Perform incremental retraining
+            success = self.incremental_retrain(X_batch, y_batch)
+
+            if success:
+                # Clear the buffer only if retraining was successful
+                self.retrain_buffer.clear()
+                self.logger.info("Retraining successful. Buffer cleared.")
+            else:
+                # Optional: Decide what to do if retrain fails. Keep buffer for next attempt?
+                # Or clear buffer anyway to avoid getting stuck? Let's keep it for now.
+                self.logger.error("Incremental retrain failed. Buffer content preserved for next attempt.")
+
+        else:
+            self.logger.debug(f"Buffer does not contain samples for both classes yet. Unique labels found: {unique_labels}. Not retraining.")
 
     def run(self):
         """Run the trading bot in a loop"""

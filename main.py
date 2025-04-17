@@ -70,7 +70,8 @@ if __name__ == "__main__":
             training_data_limit=int(config['ai_model']['training_data_limit']),
             quantity_step=float(config['trading']['quantity_step']),
             risk_per_trade=float(config['trading']['risk_per_trade']),
-            trailing_stop_loss=float(config['trading']['trailing_stop_loss'])
+            trailing_stop_loss=float(config['trading']['trailing_stop_loss']),
+            retrain_buffer_size=int(config['ai_model']['retrain_buffer_size'])  # Add this line
         )
         trading_bot.run()
 
