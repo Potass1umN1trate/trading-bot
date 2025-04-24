@@ -8,7 +8,7 @@ import shutil  # Added for copying config example
 from enhanced_trading_bot import TradingBot  # Assuming your modified bot class is here
 
 # Basic logging setup for the main script itself
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 if __name__ == "__main__":
     # Check if config exists

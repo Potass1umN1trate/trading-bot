@@ -5,11 +5,33 @@ import numpy as np
 from datetime import datetime, timedelta
 from pybit.unified_trading import HTTP
 from sklearn.preprocessing import StandardScaler
-from sklearn.neural_network import MLPClassifier
 import joblib
 import os.path
 from collections import deque
 import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
+
+# Add device handling
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using PyTorch device: {device}")
+
+# Define the LSTM model
+class LSTMModel(nn.Module):
+    def __init__(self, input_size, hidden_size, num_layers, output_size, dropout_prob=0.2):
+        super(LSTMModel, self).__init__()
+        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True, dropout=dropout_prob if num_layers > 1 else 0)
+        self.dropout = nn.Dropout(dropout_prob)
+        self.fc = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x):
+        h0 = torch.zeros(self.lstm.num_layers, x.size(0), self.lstm.hidden_size).to(x.device)
+        c0 = torch.zeros(self.lstm.num_layers, x.size(0), self.lstm.hidden_size).to(x.device)
+        out, _ = self.lstm(x, (h0, c0))
+        out = self.dropout(out[:, -1, :])  # Use the last time step
+        return self.fc(out)
 
 class TradingBot:
     def __init__(
@@ -31,6 +53,10 @@ class TradingBot:
         risk_per_trade=0.01,
         trailing_stop_loss=0.075,
         retrain_buffer_size=100, # New parameter for buffer size
+        hidden_size=64,
+        num_layers=2,
+        dropout_prob=0.2,
+        learning_rate=0.001,
     ):
         # Initialize logger
         self.setup_logger()
@@ -78,6 +104,23 @@ class TradingBot:
         self.logger.info(f"Initialized retraining buffer with max size: {self.buffer_size}")
         # ---
 
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.dropout_prob = dropout_prob
+        self.learning_rate = learning_rate
+        self.num_features_per_step = len(self.features)
+        self.model_path = 'trading_model_lstm.pth'
+        # Initialize LSTM model
+        self.model = LSTMModel(
+            input_size=self.num_features_per_step,
+            hidden_size=self.hidden_size,
+            num_layers=self.num_layers,
+            output_size=1,
+            dropout_prob=self.dropout_prob
+        ).to(device)
+        self.criterion = nn.BCEWithLogitsLoss()
+        self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
+
         # Initialize or load AI model
         self.initialize_model()
         self.stop_price = None  # Stores TSL value
@@ -86,28 +129,33 @@ class TradingBot:
         """Configure logging with timestamps and rotation"""
         self.logger = logging.getLogger('trading_bot')
         if not self.logger.hasHandlers():
-            self.logger.setLevel(logging.INFO)
+            self.logger.setLevel(logging.DEBUG)
             file_handler = logging.FileHandler('trading_bot.log')
-            file_handler.setLevel(logging.INFO)
+            file_handler.setLevel(logging.DEBUG)
             console_handler = logging.StreamHandler()
-            console_handler.setLevel(logging.INFO)
+            console_handler.setLevel(logging.DEBUG)
             formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
             file_handler.setFormatter(formatter)
             console_handler.setFormatter(formatter)
             self.logger.addHandler(file_handler)
             self.logger.addHandler(console_handler)
+        
+        self.logger.debug("Logger setup complete.")
+        self.logger.info("Logger setup complete.")
+        self.logger.warning("Logger setup complete.")
+        self.logger.error("Logger setup complete.")
 
     def initialize_model(self):
         """Initialize or load AI model"""
-        model_path = 'trading_model_raw.joblib'
+        model_path = 'trading_model_lstm.pth'
         scaler_path = 'scaler_raw.joblib'
         
         if os.path.exists(model_path) and os.path.exists(scaler_path):
-            self.logger.info(f"Loading existing RAW AI model from {model_path} and scaler from {scaler_path}")
-            self.model = joblib.load(model_path)
+            self.logger.info(f"Loading existing LSTM model from {model_path} and scaler from {scaler_path}")
+            self.model.load_state_dict(torch.load(model_path))
             self.scaler = joblib.load(scaler_path)
         else:
-            self.logger.info("No existing raw model found. Training new RAW AI model.")
+            self.logger.info("No existing model found. Training new LSTM model.")
             self.train_model()
 
     def fetch_market_data(self, interval=None, limit=96):
@@ -151,121 +199,70 @@ class TradingBot:
         self.logger.debug(f"Labels created. DataFrame shape after labeling and dropna: {df.shape}")
         return df
 
+    def create_sequence_features_and_labels(self, df):
+        """Prepare sequence data for LSTM."""
+        df['future_price'] = df['close'].shift(-self.prediction_horizon)
+        df['price_direction'] = np.where(df['future_price'] > df['close'], 1, 0)
+        df.dropna(subset=self.features + ['price_direction'], inplace=True)
+        scaled_features = self.scaler.transform(df[self.features])
+        X, y = [], []
+        for i in range(len(scaled_features) - self.lookback_period):
+            X.append(scaled_features[i:i + self.lookback_period])
+            y.append(df['price_direction'].iloc[i + self.lookback_period - 1])
+        return np.array(X), np.array(y)
+
     def train_model(self):
-        """Train the AI prediction model using RAW data"""
-        model_path = 'trading_model_raw.joblib'
-        scaler_path = 'scaler_raw.joblib'
-        self.logger.info(f"Fetching data for initial RAW model training (limit={self.training_data_limit})...")
+        """Train the LSTM model."""
         df = self.fetch_market_data(interval=self.trading_interval, limit=self.training_data_limit)
-        if df is None or len(df) < self.lookback_period + self.prediction_horizon + 50:
-            self.logger.error(f"Not enough data to train the RAW model. Fetched {len(df) if df is not None else 0} rows.")
+        if df is None or len(df) < self.lookback_period + self.prediction_horizon:
+            self.logger.error("Not enough data to train the model.")
             return False
-        df = self.create_labels(df)
-        if df is None or df.empty or len(df) < 50:
-            self.logger.error("Failed to prepare sufficient training data after labeling.")
-            return False
-        self.logger.info(f"Preparing features: {self.features}")
-        X = df[self.features]
-        y = df['price_direction'].values
         self.scaler = StandardScaler()
-        X_scaled = self.scaler.fit_transform(X)
-        self.logger.info(f"Scaler fitted on {X_scaled.shape[0]} samples.")
-        self.model = MLPClassifier(
-            hidden_layer_sizes=(64, 32),
-            activation='relu',
-            solver='adam',
-            max_iter=1,
-            warm_start=True,
-            random_state=42,
-            learning_rate_init=0.001
-        )
-        self.logger.info("Starting initial partial_fit on MLPClassifier...")
-        self.model.partial_fit(X_scaled, y, classes=np.array([0, 1]))
-        self.logger.info("Initial partial_fit complete.")
-        joblib.dump(self.model, model_path)
-        joblib.dump(self.scaler, scaler_path)
-        self.logger.info(f"RAW Model saved to {model_path}, Scaler saved to {scaler_path}")
-        return True
+        self.scaler.fit(df[self.features])
+        X, y = self.create_sequence_features_and_labels(df)
+        X_tensor = torch.FloatTensor(X).to(device)
+        y_tensor = torch.FloatTensor(y).unsqueeze(1).to(device)
+        dataset = TensorDataset(X_tensor, y_tensor)
+        dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
+        self.model.train()
+        for epoch in range(10):  # Example: 10 epochs
+            for X_batch, y_batch in dataloader:
+                self.optimizer.zero_grad()
+                outputs = self.model(X_batch)
+                loss = self.criterion(outputs, y_batch)
+                loss.backward()
+                self.optimizer.step()
+        torch.save(self.model.state_dict(), self.model_path)
+        self.logger.info(f"Model trained and saved to {self.model_path}")
 
     def incremental_retrain(self, X_batch, y_batch):
-        """
-        Incrementally retrain the model with a batch of new RAW data.
-        Assumes the caller ensures y_batch contains both classes 0 and 1.
-        """
-        model_path = 'trading_model_raw.joblib'
-
-        if self.model is None or self.scaler is None:
-            self.logger.error("Model or scaler not initialized for incremental retrain.")
-            return False # Indicate failure
-
-        # Ensure inputs are numpy arrays
-        X_batch = np.asarray(X_batch)
-        y_batch = np.asarray(y_batch)
-
-        # Basic validation
-        if X_batch.ndim != 2 or len(X_batch) == 0 or len(X_batch) != len(y_batch):
-            self.logger.error(f"Invalid input shapes for incremental retrain: X={X_batch.shape}, y={y_batch.shape}")
-            return False
-
-        self.logger.info(f"Starting incremental retrain with batch size: {len(y_batch)}")
-        self.logger.debug(f"Unique labels in batch: {np.unique(y_batch)}")
-
-        try:
-            # Scale the batch of RAW data with the existing scaler
-            X_batch_scaled = self.scaler.transform(X_batch)
-
-            # Call partial_fit, explicitly providing all possible classes
-            self.model.partial_fit(X_batch_scaled, y_batch, classes=np.array([0, 1]))
-
-            # Save the updated model
-            joblib.dump(self.model, model_path)
-            self.logger.info(f"Incremental partial_fit completed successfully. Model saved to {model_path}")
-            return True # Indicate success
-
-        except ValueError as ve:
-            # Log specific ValueErrors that might still occur
-            self.logger.error(f"ValueError during incremental retrain: {ve}")
-            self.logger.error(f"Data shapes: X_batch_scaled={X_batch_scaled.shape if 'X_batch_scaled' in locals() else 'N/A'}, y_batch={y_batch.shape}")
-            self.logger.error(f"Unique y values in batch provided to fit: {np.unique(y_batch)}")
-            return False
-        except Exception as e:
-            self.logger.error(f"Unhandled exception during incremental retrain: {e}", exc_info=True)
-            return False
+        """Incrementally retrain the LSTM model."""
+        X_tensor = torch.FloatTensor(X_batch).to(device)
+        y_tensor = torch.FloatTensor(y_batch).unsqueeze(1).to(device)
+        self.model.train()
+        self.optimizer.zero_grad()
+        outputs = self.model(X_tensor)
+        loss = self.criterion(outputs, y_tensor)
+        loss.backward()
+        self.optimizer.step()
+        torch.save(self.model.state_dict(), self.model_path)
+        self.logger.info("Model incrementally retrained and saved.")
 
     def predict_price_direction(self):
-        """Use the trained model to predict price direction using RAW data"""
-        if self.model is None or self.scaler is None:
-            self.logger.error("Model or Scaler not initialized for prediction.")
-            return None
+        """Predict price direction using the LSTM model."""
         df = self.fetch_market_data(interval=self.trading_interval, limit=self.lookback_period)
-        if df is None or df.empty:
-            self.logger.warning("Failed to fetch data for prediction or data was empty.")
+        if df is None or len(df) < self.lookback_period:
+            self.logger.warning("Not enough data for prediction.")
             return None
-        if len(df) == 0:
-            self.logger.warning("DataFrame is empty after fetching, cannot get latest data for prediction.")
-            return None
-        try:
-            latest_data_row = df.iloc[-1]
-            if latest_data_row[self.features].isnull().any():
-                self.logger.warning(f"Latest data row contains NaN in features: {latest_data_row[self.features]}. Skipping prediction.")
-                return None
-            latest_data = latest_data_row[self.features].values.reshape(1, -1)
-            scaled_data = self.scaler.transform(latest_data)
-            prediction = self.model.predict(scaled_data)[0]
-            probability = self.model.predict_proba(scaled_data)[0]
-            prediction_confidence = probability[1] if prediction == 1 else probability[0]
-            self.logger.info(f"RAW AI prediction: {'UP' if prediction == 1 else 'DOWN'} with {prediction_confidence:.2f} confidence")
-            return {
-                'direction': 'up' if prediction == 1 else 'down',
-                'confidence': prediction_confidence,
-                'timestamp': datetime.now().isoformat()
-            }
-        except IndexError:
-            self.logger.error("IndexError: Could not access iloc[-1]. DataFrame might be smaller than expected.")
-            return None
-        except Exception as e:
-            self.logger.error(f"Error during prediction: {e}")
-            return None
+        scaled_features = self.scaler.transform(df[self.features].tail(self.lookback_period))
+        X_tensor = torch.FloatTensor(scaled_features).unsqueeze(0).to(device)
+        self.model.eval()
+        with torch.no_grad():
+            logits = self.model(X_tensor)
+            probability = torch.sigmoid(logits).item()
+        direction = 'up' if probability >= 0.5 else 'down'
+        confidence = probability if direction == 'up' else 1 - probability
+        return {'direction': direction, 'confidence': confidence, 'timestamp': datetime.now().isoformat()}
 
     def get_wallet_balance(self):
         """Get available balance from wallet"""
@@ -545,7 +542,7 @@ class TradingBot:
                  return True # End cycle after closing position
         else:
             self.logger.info(f"No open position. AI Prediction: {direction.upper()} (Confidence: {confidence:.2f})")
-            CONFIDENCE_THRESHOLD = 0.75
+            CONFIDENCE_THRESHOLD = 0.70
             open_trade_flag = False
             trade_side = None
             if direction == 'up' and confidence >= CONFIDENCE_THRESHOLD:
@@ -596,7 +593,6 @@ class TradingBot:
                                     self.retrain_buffer.append((latest_features_raw, penalty_label))
                                     self.logger.info(f"Added penalty sample (label {penalty_label}) to retrain buffer. Buffer size: {len(self.retrain_buffer)}")
                                     # ------------------------------------
-                                    self.skipped_trades = 0 # Reset counter after penalty
                                 except (IndexError, KeyError) as e:
                                     self.logger.error(f"Failed to get latest raw features for penalty buffer sample: {e}")
                                 except Exception as e:
@@ -620,7 +616,7 @@ class TradingBot:
         if the buffer contains samples of both classes (0 and 1) and
         meets a minimum size requirement.
         """
-        MIN_BUFFER_FOR_RETRAIN = max(10, self.buffer_size // 10) # Require at least 10 samples or 10% of buffer size
+        MIN_BUFFER_FOR_RETRAIN = min(2, self.buffer_size // 10) # Require at least 10 samples or 10% of buffer size
 
         self.logger.debug(f"Checking retrain buffer (Current size: {len(self.retrain_buffer)}).")
 
@@ -644,6 +640,7 @@ class TradingBot:
             if success:
                 # Clear the buffer only if retraining was successful
                 self.retrain_buffer.clear()
+                self.skipped_trades = 0 # Reset counter after retraining
                 self.logger.info("Retraining successful. Buffer cleared.")
             else:
                 # Optional: Decide what to do if retrain fails. Keep buffer for next attempt?
