@@ -1,0 +1,36 @@
+2025-07-01 19:48:13,276 INFO: [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on http://127.0.0.1:5000
+2025-07-01 19:48:13,276 INFO: [33mPress CTRL+C to quit[0m
+2025-07-01 19:48:13,277 INFO:  * Restarting with stat
+2025-07-01 19:48:13,764 WARNING:  * Debugger is active!
+2025-07-01 19:48:13,774 INFO:  * Debugger PIN: 125-232-461
+2025-07-01 19:49:17,893 INFO: [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on http://127.0.0.1:5000
+2025-07-01 19:49:17,893 INFO: [33mPress CTRL+C to quit[0m
+2025-07-01 19:49:17,894 INFO:  * Restarting with stat
+2025-07-01 19:49:18,393 WARNING:  * Debugger is active!
+2025-07-01 19:49:18,395 INFO:  * Debugger PIN: 125-232-461
+2025-07-01 19:49:55,555 INFO: 127.0.0.1 - - [01/Jul/2025 19:49:55] "GET / HTTP/1.1" 200 -
+2025-07-01 19:50:59,979 INFO:  * Detected change in '/home/azureuser/trading-bot/backtest.py', reloading
+2025-07-01 19:51:00,062 INFO:  * Restarting with stat
+2025-07-01 19:51:00,545 WARNING:  * Debugger is active!
+2025-07-01 19:51:00,548 INFO:  * Debugger PIN: 125-232-461
+2025-07-01 19:51:04,827 INFO: [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://10.19.0.4:5000
+2025-07-01 19:51:04,827 INFO: [33mPress CTRL+C to quit[0m
+2025-07-01 19:51:04,828 INFO:  * Restarting with stat
+2025-07-01 19:51:05,301 WARNING:  * Debugger is active!
+2025-07-01 19:51:05,305 INFO:  * Debugger PIN: 125-232-461
+2025-07-01 19:51:16,864 ERROR: 20.160.99.38 - - [01/Jul/2025 19:51:16] code 400, message Bad request version ('··h±\x96\x95ìÚ\x96ís£\x00"\x13\x01\x13\x03\x13\x02À+À/Ì©Ì¨À,À0À')
+2025-07-01 19:51:16,864 INFO: 20.160.99.38 - - [01/Jul/2025 19:51:16] "[31m[1m\x16\x03\x01\x07O\x01\x00\x07K\x03\x03DJSÉb·\x06Á^L®\x98!² T\x1aü\x9fP\x97\x00±IåÿWî¼W\x860 \x9eè;\x04f\x1d#äB\x8e<Ôõ§Ç\x1b51Ð ··h±\x96\x95ìÚ\x96ís£\x00"\x13\x01\x13\x03\x13\x02À+À/Ì©Ì¨À,À0À[0m" 400 -
+2025-07-01 19:51:17,067 ERROR: 20.160.99.38 - - [01/Jul/2025 19:51:17] code 400, message Bad request version ('\x9fPpé\x10\x92\x9fáàÜ\x89¶uKKNx)iqÍ\x96ôÌR\x06ÆóT\x19\x97Þ\x00"\x13\x01\x13\x03\x13\x02À+À/Ì©Ì¨À,À0À')
+2025-07-01 19:51:17,067 INFO: 20.160.99.38 - - [01/Jul/2025 19:51:17] "[31m[1m\x16\x03\x01\x02~\x01\x00\x02z\x03\x03E± y'\x82\x0dBÿü­-¿Ö\x00\x03*±@\x08\\É^Ø\x86´À-aÅ~G \x9fPpé\x10\x92\x9fáàÜ\x89¶uKKNx)iqÍ\x96ôÌR\x06ÆóT\x19\x97Þ\x00"\x13\x01\x13\x03\x13\x02À+À/Ì©Ì¨À,À0À[0m" 400 -
+2025-07-01 19:51:21,402 INFO: 20.160.99.38 - - [01/Jul/2025 19:51:21] "GET / HTTP/1.1" 200 -
+2025-07-01 19:51:23,016 INFO: 20.160.99.38 - - [01/Jul/2025 19:51:23] "[33mGET /favicon.ico HTTP/1.1[0m" 404 -
+2025-07-01 19:52:35,315 INFO: Files uploaded: ./uploads/4h.csv, ./uploads/1d.csv
+2025-07-01 19:52:35,317 ERROR: ValueError: Missing column provided to 'parse_dates': 'date'
+2025-07-01 19:52:35,320 INFO: 20.160.99.38 - - [01/Jul/2025 19:52:35] "POST / HTTP/1.1" 200 -
+2025-07-01 19:54:37,585 INFO:  * Detected change in '/home/azureuser/trading-bot/backtest.py', reloading
+2025-07-01 19:54:37,670 INFO:  * Restarting with stat
