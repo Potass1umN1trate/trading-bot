@@ -1,10 +1,9 @@
 from flask import Flask, request, render_template_string, send_file, session
-import io
 from datetime import datetime
 import traceback
-
 from bybit_data import get_klines
 from backtest import backtest_strategy
+import io
 
 app = Flask(__name__)
 app.secret_key = 'supersecret'
@@ -14,14 +13,18 @@ HTML_FORM = '''
 <title>Backtest Bybit EMA-Strategy</title>
 <h2>Run Backtest with Bybit Data</h2>
 <form method=post>
-  Symbol: <input type=text name=symbol value="BTCUSDT"><br>
+  Symbol: <input type=text name=symbol value="{{ symbol }}"><br>
   Category: <select name=category>
-    <option value="linear">linear</option>
-    <option value="spot">spot</option>
-    <option value="inverse">inverse</option>
+    <option value="linear" {% if category == 'linear' %}selected{% endif %}>linear</option>
+    <option value="spot" {% if category == 'spot' %}selected{% endif %}>spot</option>
+    <option value="inverse" {% if category == 'inverse' %}selected{% endif %}>inverse</option>
   </select><br>
-  Start Date (YYYY-MM-DD): <input type=text name=start value="2023-01-01"><br>
-  End Date (YYYY-MM-DD): <input type=text name=end value="2023-07-01"><br>
+  Start Date (YYYY-MM-DD): <input type=text name=start value="{{ start }}"><br>
+  End Date (YYYY-MM-DD): <input type=text name=end value="{{ end }}"><br>
+  Deposit ($): <input type=number step=any name=deposit value="{{ deposit }}"><br>
+  Risk per trade (%) : <input type=number step=any name=risk value="{{ risk }}"><br>
+  Stop percent (%) : <input type=number step=any name=stop_percent value="{{ stop_percent }}"><br>
+  Take percent (%) : <input type=number step=any name=take_percent value="{{ take_percent }}"><br>
   <input type=submit value="Run Backtest">
 </form>
 <hr>
@@ -34,7 +37,8 @@ HTML_FORM = '''
   <h3>Results:</h3>
   <b>Total trades:</b> {{ result.total_trades }}<br>
   <b>Win rate:</b> {{ result.winrate }}%<br>
-  <b>Total profit (in asset):</b> {{ result.total_profit }}<br>
+  <b>Total profit ($):</b> {{ result.total_profit_usd }}<br>
+  <b>Total profit (asset):</b> {{ result.total_profit_asset }}<br>
   <a href="/download_csv" target="_blank">Download All Trades (CSV)</a>
   <hr>
   <b>All trades:</b><br>
@@ -46,28 +50,56 @@ HTML_FORM = '''
 def index():
     result = None
     error = None
+
+    # Default values
+    symbol = 'BTCUSDT'
+    category = 'linear'
+    start = '2023-01-01'
+    end = '2023-07-01'
+    deposit = 1000
+    risk = 1
+    stop_percent = 5
+    take_percent = 10
+
     if request.method == 'POST':
         try:
-            symbol = request.form.get('symbol', 'BTCUSDT').upper()
-            category = request.form.get('category', 'linear')
-            start = datetime.strptime(request.form.get('start', '2023-01-01'), '%Y-%m-%d')
-            end = datetime.strptime(request.form.get('end', '2023-07-01'), '%Y-%m-%d')
+            symbol = request.form.get('symbol', symbol).upper()
+            category = request.form.get('category', category)
+            start = request.form.get('start', start)
+            end = request.form.get('end', end)
+            deposit = float(request.form.get('deposit', deposit))
+            risk = float(request.form.get('risk', risk))
+            stop_percent = float(request.form.get('stop_percent', stop_percent))
+            take_percent = float(request.form.get('take_percent', take_percent))
 
-            df_1d = get_klines(category, symbol, "D", start, end)
-            df_4h = get_klines(category, symbol, "240", start, end)
-            bt = backtest_strategy(df_4h, df_1d)
-            # Save DataFrame to session for download
+            df_1d = get_klines(category, symbol, "D", datetime.strptime(start, '%Y-%m-%d'), datetime.strptime(end, '%Y-%m-%d'))
+            df_4h = get_klines(category, symbol, "240", datetime.strptime(start, '%Y-%m-%d'), datetime.strptime(end, '%Y-%m-%d'))
+            bt = backtest_strategy(df_4h, df_1d, deposit, risk, stop_percent, take_percent)
             session['trades_csv'] = bt['results'].to_csv(index=False)
             result = {
                 'total_trades': bt['total_trades'],
                 'winrate': bt['winrate'],
-                'total_profit': round(bt['total_profit'], 2),
+                'total_profit_usd': round(bt['total_profit_usd'], 2),
+                'total_profit_asset': round(bt['total_profit_asset'], 6),
                 'trades': bt['results'].to_html(index=False)
             }
-        except Exception as e:
-            import traceback
+        except Exception:
             error = traceback.format_exc()
-    return render_template_string(HTML_FORM, result=result, error=error)
+    else:
+        # GET-запрос — сохранить дефолтные или последние введённые значения
+        pass
+
+    return render_template_string(HTML_FORM,
+                                 result=result,
+                                 error=error,
+                                 symbol=symbol,
+                                 category=category,
+                                 start=start,
+                                 end=end,
+                                 deposit=deposit,
+                                 risk=risk,
+                                 stop_percent=stop_percent,
+                                 take_percent=take_percent)
 
 @app.route('/download_csv')
 def download_csv():

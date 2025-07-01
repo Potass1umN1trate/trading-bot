@@ -1,10 +1,10 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
 
 def ema(df, period, price_col='close'):
     return df[price_col].ewm(span=period).mean()
 
-def backtest_strategy(df_4h: pd.DataFrame, df_1d: pd.DataFrame):
+def backtest_strategy(df_4h, df_1d, deposit, risk_percent, stop_percent, take_percent):
     # EMA на 1D
     df_1d['EMA50'] = ema(df_1d, 50)
     df_1d['EMA200'] = ema(df_1d, 200)
@@ -15,7 +15,6 @@ def backtest_strategy(df_4h: pd.DataFrame, df_1d: pd.DataFrame):
     df_4h['EMA200'] = ema(df_4h, 200)
     df_4h['SMAvol9'] = df_4h['volume'].rolling(9).mean()
 
-    # Присоединить к каждой 4H-свече значения EMA50/200 с 1D
     df_4h = pd.merge_asof(
         df_4h.sort_values('startTime'), 
         df_1d[['startTime', 'EMA50', 'EMA200']].sort_values('startTime'), 
@@ -32,18 +31,24 @@ def backtest_strategy(df_4h: pd.DataFrame, df_1d: pd.DataFrame):
                (candle['close'] >= candle['EMA21']) and \
                (candle['volume'] > candle['SMAvol9']):
                 entry = df_4h.iloc[i + 1]['open']
-                stop = min(candle['low'], candle['EMA21']) * 0.995
-                take = entry + 2 * (entry - stop)
+                stop = entry * (1 - stop_percent/100.0)
+                take = entry * (1 + take_percent/100.0)
+                pos_risk = deposit * (risk_percent/100.0)
+                volume = pos_risk / abs(entry - stop)
                 outcome = None
                 for j in range(i + 1, min(i + 30, len(df_4h) - 1)):
                     bar = df_4h.iloc[j]
                     if bar['low'] <= stop:
                         exit_price = stop
                         outcome = 'stop'
+                        profit = (exit_price - entry) * volume
+                        profit_asset = (exit_price - entry) / entry * volume
                         break
                     if bar['high'] >= take:
                         exit_price = take
                         outcome = 'take'
+                        profit = (exit_price - entry) * volume
+                        profit_asset = (exit_price - entry) / entry * volume
                         break
                 if outcome:
                     signals.append({
@@ -52,22 +57,21 @@ def backtest_strategy(df_4h: pd.DataFrame, df_1d: pd.DataFrame):
                         'stop': stop,
                         'take': take,
                         'exit': exit_price,
-                        'outcome': outcome
+                        'outcome': outcome,
+                        'risk_usd': pos_risk,
+                        'volume': volume,
+                        'profit_usd': profit,
+                        'profit_asset': profit_asset
                     })
     results = pd.DataFrame(signals)
     total_trades = len(results)
     winrate = round(100*sum(results['outcome']=='take')/total_trades,1) if total_trades else 0
-
-    # Calculate profit: (Take = +1R, Stop = -1R) — you can scale R to $, %, or anything you want.
-    if not results.empty:
-        results['profit'] = np.where(results['outcome']=='take', results['take']-results['entry'], results['exit']-results['entry'])
-        total_profit = results['profit'].sum()
-    else:
-        total_profit = 0
-
+    total_profit_usd = results['profit_usd'].sum() if not results.empty else 0
+    total_profit_asset = results['profit_asset'].sum() if not results.empty else 0
     return {
         'total_trades': total_trades,
         'winrate': winrate,
         'results': results,
-        'total_profit': total_profit
+        'total_profit_usd': total_profit_usd,
+        'total_profit_asset': total_profit_asset
     }
