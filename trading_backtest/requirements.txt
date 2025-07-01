@@ -2,3 +2,5 @@ flask
 pandas
 pybit
 pandas_ta
+setuptools
+numpy==1.26.3
