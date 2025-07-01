@@ -1,4 +1,0 @@
-pybit
-pandas
-aiogram
-pyyaml
