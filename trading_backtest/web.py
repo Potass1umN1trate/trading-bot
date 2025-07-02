@@ -21,10 +21,17 @@ HTML_FORM = '''
   </select><br>
   Start Date (YYYY-MM-DD): <input type=text name=start value="{{ start }}"><br>
   End Date (YYYY-MM-DD): <input type=text name=end value="{{ end }}"><br>
-  Deposit ($): <input type=number step=any name=deposit value="{{ deposit }}"><br>
-  Risk per trade (%) : <input type=number step=any name=risk value="{{ risk }}"><br>
-  Stop percent (%) : <input type=number step=any name=stop_percent value="{{ stop_percent }}"><br>
-  Take percent (%) : <input type=number step=any name=take_percent value="{{ take_percent }}"><br>
+  Deposit: <input type="number" name="deposit" step="any" value="{{ deposit }}"><br>
+  Risk percent: <input type="number" name="risk" step="any" value="{{ risk }}"><br>
+  Stop percent: <input type="number" name="stop_percent" step="any" value="{{ stop_percent }}"><br>
+  Take percent: <input type="number" name="take_percent" step="any" value="{{ take_percent }}"><br>
+  <b>Trailing stop (%)</b>: <input type="number" name="trailing_percent" step="any" value="{{ trailing_percent }}"><br>
+  <b>Min ADX (1D)</b>: <input type="number" name="min_adx_day" step="any" value="{{ min_adx_day }}"><br>
+  <b>Min ADX (4H)</b>: <input type="number" name="min_adx_4h" step="any" value="{{ min_adx_4h }}"><br>
+  <label>
+      <input type="checkbox" name="adaptive_tp" {% if adaptive_tp %}checked{% endif %}>
+      Adaptive Take Profit
+  </label><br>
   <input type=submit value="Run Backtest">
 </form>
 <hr>
@@ -60,6 +67,10 @@ def index():
     risk = 1
     stop_percent = 5
     take_percent = 10
+    trailing_percent = 0
+    min_adx_day = 17
+    min_adx_4h = 20
+    adaptive_tp = False
 
     if request.method == 'POST':
         try:
@@ -71,10 +82,16 @@ def index():
             risk = float(request.form.get('risk', risk))
             stop_percent = float(request.form.get('stop_percent', stop_percent))
             take_percent = float(request.form.get('take_percent', take_percent))
+            trailing_percent = request.form.get("trailing_percent")
+            trailing_percent = float(trailing_percent) if trailing_percent not in [None, ""] else None
+            min_adx_day = float(request.form.get("min_adx_day", min_adx_day))
+            min_adx_4h = float(request.form.get("min_adx_4h", min_adx_4h))
+            adaptive_tp = request.form.get("adaptive_tp") == 'on'
 
             df_1d = get_klines(category, symbol, "D", datetime.strptime(start, '%Y-%m-%d'), datetime.strptime(end, '%Y-%m-%d'))
             df_4h = get_klines(category, symbol, "240", datetime.strptime(start, '%Y-%m-%d'), datetime.strptime(end, '%Y-%m-%d'))
-            bt = backtest_strategy(df_4h, df_1d, deposit, risk, stop_percent, take_percent)
+            bt = backtest_strategy(df_4h, df_1d, deposit, risk, stop_percent, take_percent, 
+                                  min_adx_day=min_adx_day, min_adx_4h=min_adx_4h, trailing_percent=trailing_percent, adaptive_tp=adaptive_tp)
             session['trades_csv'] = bt['results'].to_csv(index=False)
             result = {
                 'total_trades': bt['total_trades'],
@@ -99,7 +116,12 @@ def index():
                                  deposit=deposit,
                                  risk=risk,
                                  stop_percent=stop_percent,
-                                 take_percent=take_percent)
+                                 take_percent=take_percent,
+                                 trailing_percent=trailing_percent,
+                                 min_adx_day=min_adx_day,
+                                 min_adx_4h=min_adx_4h,
+                                 adaptive_tp=adaptive_tp
+                                 )
 
 @app.route('/download_csv')
 def download_csv():

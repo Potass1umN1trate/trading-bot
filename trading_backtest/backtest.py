@@ -8,10 +8,8 @@ def ema(df, period, price_col='close'):
 
 def backtest_strategy(
     df_4h, df_1d, deposit, risk_percent, stop_percent, take_percent,
-    min_adx_day=20, min_adx_4h=20, trailing_percent=0
+    min_adx_day=20, min_adx_4h=20, trailing_percent=0, adaptive_tp=True
 ):
-    import pandas_ta as ta
-
     # Setup logging to file
     logging.basicConfig(
         level=logging.DEBUG,
@@ -82,6 +80,7 @@ def backtest_strategy(
                 highest_price = entry
                 trailing_stop = stop
                 outcome = None
+                adaptive_exit = None
                 for j in range(i + 1, min(i + 30, len(df_4h) - 1)):
                     bar = df_4h.iloc[j]
                     # Update trailing stop
@@ -94,11 +93,26 @@ def backtest_strategy(
                     # Check exit
                     if bar['low'] <= trailing_stop:
                         exit_price = trailing_stop
-                        outcome = 'stop'
+                        outcome = 'trailing stop' if trailing_stop > stop else 'stop'
                         profit = (exit_price - entry) * volume
                         profit_asset = (exit_price - entry) / entry * volume
                         break
-                    if bar['high'] >= take:
+                    if adaptive_tp:
+                        # Bearish engulfing (выход из лонга)
+                        bearish_engulfing = (
+                            bar['close'] < bar['open'] and
+                            df_4h.iloc[j-1]['close'] > df_4h.iloc[j-1]['open'] and
+                            bar['open'] >= df_4h.iloc[j-1]['close'] and
+                            bar['close'] < df_4h.iloc[j-1]['open']
+                        )
+                        if bearish_engulfing or bar['close'] < bar['EMA21']:
+                            exit_price = bar['close']
+                            outcome = 'adaptive_tp'
+                            profit = (exit_price - entry) * volume
+                            profit_asset = (exit_price - entry) / entry * volume
+                            adaptive_exit = True
+                            break
+                    elif bar['high'] >= take:
                         exit_price = take
                         outcome = 'take'
                         profit = (exit_price - entry) * volume
@@ -119,7 +133,8 @@ def backtest_strategy(
                         'profit_asset': profit_asset,
                         'adx_4h': candle['ADX'],
                         'adx_1d': candle['ADX_1d'],
-                        'pattern': 'bullish_engulfing' if bullish_engulfing else ('pinbar' if pinbar else '')
+                        'pattern': 'bullish_engulfing' if bullish_engulfing else ('pinbar' if pinbar else ''),
+                        'adaptive_exit': ("None" if not adaptive_exit else adaptive_exit)
                     }
                     logger.debug(f"Processed LONG trade: {trade_info}")
                     signals.append(trade_info)
@@ -183,6 +198,7 @@ def backtest_strategy(
                 volume = pos_risk / abs(entry - stop)
                 lowest_price = entry
                 trailing_stop = stop
+                adaptive_exit = None
                 outcome = None
                 for j in range(i + 1, min(i + 30, len(df_4h) - 1)):
                     bar = df_4h.iloc[j]
@@ -196,11 +212,26 @@ def backtest_strategy(
                     # Check exit
                     if bar['high'] >= trailing_stop:
                         exit_price = trailing_stop
-                        outcome = 'stop'
+                        outcome = 'trailing stop' if trailing_stop > stop else 'stop'
                         profit = (entry - exit_price) * volume
                         profit_asset = (entry - exit_price) / entry * volume
                         break
-                    if bar['low'] <= take:
+                    if adaptive_tp:
+                        # Bullish engulfing (выход из шорта)
+                        bullish_engulfing = (
+                            bar['close'] > bar['open'] and
+                            df_4h.iloc[j-1]['close'] < df_4h.iloc[j-1]['open'] and
+                            bar['open'] <= df_4h.iloc[j-1]['close'] and
+                            bar['close'] > df_4h.iloc[j-1]['open']
+                        )
+                        if bullish_engulfing or bar['close'] > bar['EMA21']:
+                            exit_price = bar['close']
+                            outcome = 'adaptive_tp'
+                            profit = (entry - exit_price) * volume
+                            profit_asset = (entry - exit_price) / entry * volume
+                            adaptive_exit = True
+                            break
+                    elif bar['low'] <= take:
                         exit_price = take
                         outcome = 'take'
                         profit = (entry - exit_price) * volume
@@ -221,7 +252,8 @@ def backtest_strategy(
                         'profit_asset': profit_asset,
                         'adx_4h': candle['ADX'],
                         'adx_1d': candle['ADX_1d'],
-                        'pattern': 'bearish_engulfing' if bearish_engulfing else ('pinbar' if pinbar else '')
+                        'pattern': 'bearish_engulfing' if bearish_engulfing else ('pinbar' if pinbar else ''),
+                        'adaptive_exit': adaptive_exit
                     }
                     logger.debug(f"Processed SHORT trade: {trade_info}")
                     signals.append(trade_info)
