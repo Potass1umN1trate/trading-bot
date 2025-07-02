@@ -107,8 +107,8 @@ def backtest_strategy(
                         )
                         if bearish_engulfing or bar['close'] < bar['EMA21']:
                             exit_price = bar['close']
-                            outcome = 'adaptive_tp'
                             profit = (exit_price - entry) * volume
+                            outcome = 'adaptive_tp lose' if profit < 0 else 'adaptive_tp win'
                             profit_asset = (exit_price - entry) / entry * volume
                             adaptive_exit = True
                             break
@@ -226,8 +226,8 @@ def backtest_strategy(
                         )
                         if bullish_engulfing or bar['close'] > bar['EMA21']:
                             exit_price = bar['close']
-                            outcome = 'adaptive_tp'
                             profit = (entry - exit_price) * volume
+                            outcome = 'adaptive_tp lose' if profit < 0 else 'adaptive_tp win'
                             profit_asset = (entry - exit_price) / entry * volume
                             adaptive_exit = True
                             break
@@ -286,7 +286,7 @@ def backtest_strategy(
             })
     results = pd.DataFrame(signals)
     total_trades = len(results)
-    winrate = round(100*sum(results['outcome']=='take')/total_trades,1) if total_trades else 0
+    winrate = round(100*(sum(results['outcome']=='take')+sum(results['outcome']=='adaptive_tp win'))/total_trades,1) if total_trades else 0
     total_profit_usd = results['profit_usd'].sum() if not results.empty else 0
     total_profit_asset = results['profit_asset'].sum() if not results.empty else 0
     return {
