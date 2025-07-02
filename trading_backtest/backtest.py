@@ -12,10 +12,12 @@ def backtest_strategy(
 ):
     import pandas_ta as ta
 
-    # Setup logging
+    # Setup logging to file
     logging.basicConfig(
         level=logging.DEBUG,
-        format="%(asctime)s [%(levelname)s] %(message)s"
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        filename="backtest.log",
+        filemode="w"
     )
     logger = logging.getLogger("backtest")
 
@@ -60,8 +62,14 @@ def backtest_strategy(
             upper_shadow = candle['high'] - max(candle['open'], candle['close'])
             pinbar = lower_shadow >= 2 * body and lower_shadow > upper_shadow
 
+            # if (candle['EMA50'] > candle['EMA200']) and \
+            #    (candle['low'] <= candle['EMA21']) and \
+            #    (candle['close'] >= candle['EMA21']) and \
+            #    (candle['volume'] > candle['SMAvol9']) and \
+            #    (bullish_engulfing or pinbar):
+                
+            
             if (candle['EMA50'] > candle['EMA200']) and \
-               (candle['low'] <= candle['EMA21']) and \
                (candle['close'] >= candle['EMA21']) and \
                (candle['volume'] > candle['SMAvol9']) and \
                (bullish_engulfing or pinbar):
@@ -71,6 +79,7 @@ def backtest_strategy(
                 take = entry * (1 + take_percent/100.0)
                 pos_risk = deposit * (risk_percent/100.0)
                 volume = pos_risk / abs(entry - stop)
+                position_size = volume * entry
                 outcome = None
                 for j in range(i + 1, min(i + 30, len(df_4h) - 1)):
                     bar = df_4h.iloc[j]
@@ -163,6 +172,7 @@ def backtest_strategy(
                 take = entry * (1 - take_percent/100.0)
                 pos_risk = deposit * (risk_percent/100.0)
                 volume = pos_risk / abs(entry - stop)
+                position_size = volume * entry
                 outcome = None
                 for j in range(i + 1, min(i + 30, len(df_4h) - 1)):
                     bar = df_4h.iloc[j]
