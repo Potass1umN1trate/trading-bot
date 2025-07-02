@@ -8,7 +8,7 @@ def ema(df, period, price_col='close'):
 
 def backtest_strategy(
     df_4h, df_1d, deposit, risk_percent, stop_percent, take_percent,
-    min_adx_day=20, min_adx_4h=20
+    min_adx_day=20, min_adx_4h=20, trailing_percent=0
 ):
     import pandas_ta as ta
 
@@ -79,12 +79,21 @@ def backtest_strategy(
                 take = entry * (1 + take_percent/100.0)
                 pos_risk = deposit * (risk_percent/100.0)
                 volume = pos_risk / abs(entry - stop)
-                position_size = volume * entry
+                highest_price = entry
+                trailing_stop = stop
                 outcome = None
                 for j in range(i + 1, min(i + 30, len(df_4h) - 1)):
                     bar = df_4h.iloc[j]
-                    if bar['low'] <= stop:
-                        exit_price = stop
+                    # Update trailing stop
+                    if trailing_percent is not None:
+                        if bar['high'] > highest_price:
+                            highest_price = bar['high']
+                            new_trailing_stop = highest_price * (1 - trailing_percent/100.0)
+                            if new_trailing_stop > trailing_stop:
+                                trailing_stop = new_trailing_stop
+                    # Check exit
+                    if bar['low'] <= trailing_stop:
+                        exit_price = trailing_stop
                         outcome = 'stop'
                         profit = (exit_price - entry) * volume
                         profit_asset = (exit_price - entry) / entry * volume
@@ -107,7 +116,7 @@ def backtest_strategy(
                         'risk_usd': pos_risk,
                         'volume': volume,
                         'profit_usd': profit,
-                        'profit_asset': profit,
+                        'profit_asset': profit_asset,
                         'adx_4h': candle['ADX'],
                         'adx_1d': candle['ADX_1d'],
                         'pattern': 'bullish_engulfing' if bullish_engulfing else ('pinbar' if pinbar else '')
@@ -172,12 +181,21 @@ def backtest_strategy(
                 take = entry * (1 - take_percent/100.0)
                 pos_risk = deposit * (risk_percent/100.0)
                 volume = pos_risk / abs(entry - stop)
-                position_size = volume * entry
+                lowest_price = entry
+                trailing_stop = stop
                 outcome = None
                 for j in range(i + 1, min(i + 30, len(df_4h) - 1)):
                     bar = df_4h.iloc[j]
-                    if bar['high'] >= stop:
-                        exit_price = stop
+                    # Update trailing stop
+                    if trailing_percent is not None:
+                        if bar['low'] < lowest_price:
+                            lowest_price = bar['low']
+                            new_trailing_stop = lowest_price * (1 + trailing_percent/100.0)
+                            if new_trailing_stop < trailing_stop:
+                                trailing_stop = new_trailing_stop
+                    # Check exit
+                    if bar['high'] >= trailing_stop:
+                        exit_price = trailing_stop
                         outcome = 'stop'
                         profit = (entry - exit_price) * volume
                         profit_asset = (entry - exit_price) / entry * volume
@@ -200,7 +218,7 @@ def backtest_strategy(
                         'risk_usd': pos_risk,
                         'volume': volume,
                         'profit_usd': profit,
-                        'profit_asset': profit,
+                        'profit_asset': profit_asset,
                         'adx_4h': candle['ADX'],
                         'adx_1d': candle['ADX_1d'],
                         'pattern': 'bearish_engulfing' if bearish_engulfing else ('pinbar' if pinbar else '')
