@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import pandas_ta as ta
+import logging
 
 def ema(df, period, price_col='close'):
     return df[price_col].ewm(span=period).mean()
@@ -10,6 +11,13 @@ def backtest_strategy(
     min_adx_day=20, min_adx_4h=20
 ):
     import pandas_ta as ta
+
+    # Setup logging
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s [%(levelname)s] %(message)s"
+    )
+    logger = logging.getLogger("backtest")
 
     # EMA и ADX на 1D
     df_1d['EMA50'] = ema(df_1d, 50)
@@ -44,7 +52,7 @@ def backtest_strategy(
             bullish_engulfing = (
                 candle['close'] > candle['open'] and
                 prev_candle['close'] < prev_candle['open'] and
-                candle['open'] < prev_candle['close'] and
+                candle['open'] <= prev_candle['close'] and
                 candle['close'] > prev_candle['open']
             )
             body = abs(candle['close'] - candle['open'])
@@ -79,7 +87,7 @@ def backtest_strategy(
                         profit_asset = (exit_price - entry) / entry * volume
                         break
                 if outcome:
-                    signals.append({
+                    trade_info = {
                         'date': df_4h.iloc[i+1]['startTime'],
                         'side': 'long',
                         'entry': entry,
@@ -94,7 +102,36 @@ def backtest_strategy(
                         'adx_4h': candle['ADX'],
                         'adx_1d': candle['ADX_1d'],
                         'pattern': 'bullish_engulfing' if bullish_engulfing else ('pinbar' if pinbar else '')
-                    })
+                    }
+                    logger.debug(f"Processed LONG trade: {trade_info}")
+                    signals.append(trade_info)
+            else:
+                logger.debug({
+                    'date': candle['startTime'],
+                    'side': 'long',
+                    'skipped': True,
+                    'reason': 'Entry conditions not met',
+                    'EMA50': candle['EMA50'],
+                    'EMA200': candle['EMA200'],
+                    'EMA21': candle['EMA21'],
+                    'low': candle['low'],
+                    'close': candle['close'],
+                    'volume': candle['volume'],
+                    'SMAvol9': candle['SMAvol9'],
+                    'bullish_engulfing': bullish_engulfing,
+                    'pinbar': pinbar
+                })
+        else:
+            logger.debug({
+                'date': candle['startTime'],
+                'side': 'long',
+                'skipped': True,
+                'reason': '1D trend/ADX conditions not met',
+                'EMA50_1d': candle['EMA50_1d'],
+                'EMA200_1d': candle['EMA200_1d'],
+                'ADX_1d': candle['ADX_1d'],
+                'ADX_4h': candle['ADX']
+            })
 
         # ==== SHORT ====
         if (
@@ -105,7 +142,7 @@ def backtest_strategy(
             # Медвежье поглощение
             bearish_engulfing = (
                 candle['close'] < candle['open'] and
-                prev_candle['close'] > prev_candle['open'] and
+                prev_candle['close'] >= prev_candle['open'] and
                 candle['open'] > prev_candle['close'] and
                 candle['close'] < prev_candle['open']
             )
@@ -142,7 +179,7 @@ def backtest_strategy(
                         profit_asset = (entry - exit_price) / entry * volume
                         break
                 if outcome:
-                    signals.append({
+                    trade_info = {
                         'date': df_4h.iloc[i+1]['startTime'],
                         'side': 'short',
                         'entry': entry,
@@ -157,7 +194,36 @@ def backtest_strategy(
                         'adx_4h': candle['ADX'],
                         'adx_1d': candle['ADX_1d'],
                         'pattern': 'bearish_engulfing' if bearish_engulfing else ('pinbar' if pinbar else '')
-                    })
+                    }
+                    logger.debug(f"Processed SHORT trade: {trade_info}")
+                    signals.append(trade_info)
+            else:
+                logger.debug({
+                    'date': candle['startTime'],
+                    'side': 'short',
+                    'skipped': True,
+                    'reason': 'Entry conditions not met',
+                    'EMA50': candle['EMA50'],
+                    'EMA200': candle['EMA200'],
+                    'EMA21': candle['EMA21'],
+                    'high': candle['high'],
+                    'close': candle['close'],
+                    'volume': candle['volume'],
+                    'SMAvol9': candle['SMAvol9'],
+                    'bearish_engulfing': bearish_engulfing,
+                    'pinbar': pinbar
+                })
+        else:
+            logger.debug({
+                'date': candle['startTime'],
+                'side': 'short',
+                'skipped': True,
+                'reason': '1D trend/ADX conditions not met',
+                'EMA50_1d': candle['EMA50_1d'],
+                'EMA200_1d': candle['EMA200_1d'],
+                'ADX_1d': candle['ADX_1d'],
+                'ADX_4h': candle['ADX']
+            })
     results = pd.DataFrame(signals)
     total_trades = len(results)
     winrate = round(100*sum(results['outcome']=='take')/total_trades,1) if total_trades else 0
